@@ -1,0 +1,574 @@
+#include <WiFi.h>              // WiFi support
+#include <WebServer.h>         // HTTP Web server
+#include <WebSocketsClient.h>  // WebSocket client
+#include <WebSocketsServer.h>  // WebSocket server
+#include <EEPROM.h>            // EEPROM for storing configuration
+#include <ArduinoJson.h>       // JSON serialization/deserialization
+#include <ESPmDNS.h>           // mDNS responder
+#include <WiFiUdp.h>           // UDP for OTA
+#include <ArduinoOTA.h>        // Over-The-Air update
+#include "EmonLib.h"           // Energy monitoring library
+#include <Wire.h>              // I2C communication
+// #include <PCF8574.h>        // PCF8574 library for I/O expansion
+
+//---------- HTML pages for web interface ----------
+#include "login-page.h"
+#include "config-page.h"
+#include "success-page.h"
+
+//---------- EEPROM configuration ----------
+#define EEPROM_SIZE 512       // EEPROM size in bytes
+#define HARDWARE_ID_ADDR 64   // Hardware ID address in EEPROM
+#define SERVER_IP_ADDR 96     // Server IP address in EEPROM
+#define HARDWARE_IP_ADDR 128  // Hardware IP address in EEPROM
+#define WIFI_SSID_ADDR 160    // WiFi SSID address in EEPROM
+#define WIFI_PASS_ADDR 192    // Password SSID address in EEPROM
+#define SERVER_PORT_ADDR 224  // Server port address in EEPROM
+
+//---------- Access Point configuration ----------
+const char* ap_ssid = "Esp32";                  // SSID Access Point
+const char* ap_password = "12345678";           // Password Access Point
+bool isAPMode = true;                           // Status mode AP
+
+//---------- Configuration PCF8574 ----------
+// PCF8574 pcf8574(0x20);  // Address PCF8574
+
+//---------- Monitoring server configuration ----------
+int monitoring_port = 80;  // Port server monitoring
+
+//---------- Device configuration variables ----------
+String hardwareId = "001";                      // ID hardware
+String serverIP = "192.168.1.91";               // IP server monitoring
+String hardwareIP = "192.168.1.100";            // IP hardware
+
+//---------- Input and output pins ----------
+// const int INPUT_PINS[] = { 4, 34, 12, 13 };                            // Pin input
+// const int OUTPUT_PINS[] = { 33, 25, 26, 27 };                          // Pin output
+
+//---------- Input and output pins ----------
+const int INPUT_PINS[] = {4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22};  // Pin input
+const int OUTPUT_PINS[] = {23, 25, 26, 27};                               // Pin output
+const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);        // Sum of input pins
+const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);     // Sum of output pins
+
+// const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);     // Sum of input pins
+// const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);  // Sum of output pins
+uint8_t lastInputStates[12] = { 0 };                                      // Array to store last input states
+
+//---------- Current sensor (SCT-013) configuration ----------
+const int SCT_013_PIN = 32;
+float nilai_kalibrasi = 3.15;
+
+//---------- Object initialization ----------
+WebSocketsClient webSocket;  // WebSocket client
+WebServer server(80);        // Web server on port 80
+EnergyMonitor emon1;         // Energy monitoring object
+
+//---------- WiFi credentials ----------
+String storedSSID = "";      // SSID WiFi
+String storedPassword = "";  // Password WiFi
+
+//---------- Timing control ----------
+unsigned long lastMonitoringTime = 0;  // Time of last monitoring data send
+const long monitoringInterval = 200;   // Interval for sending monitoring data (in milliseconds)
+unsigned long lastForceSendTime = 0;   // Time of last forced send
+const unsigned long forceSendInterval = 60000;  // Interval for forced send (in milliseconds)
+
+//---------- Default login credentials for web UI ----------
+const char* default_username = "contoh";     // Username default
+const char* default_password = "password";  // Password default
+bool isAuthenticated = false;               // Authentication status
+
+//---------- Helper: Check if EEPROM address has been initialized ----------
+bool isEEPROMInitialized(int address) {
+  byte value = EEPROM.read(address);
+  return value != 255;  // Check if the value is not 255 (uninitialized)
+}
+
+//---------- Detect changes in input pins ----------
+bool checkInputChanges() {
+  bool changed = false;
+
+  // Check input pins
+  for (int i = 0; i < NUM_INPUTS; i++) {
+    uint8_t current = digitalRead(INPUT_PINS[i]);
+    if (current != lastInputStates[i]) {
+      lastInputStates[i] = current;
+      changed = true;
+    }
+  }
+
+  // Check PCF8574 inputs (if used)
+  // for (int i = 0; i < 8; i++) {
+  //   uint8_t current = pcf8574.read(i);
+  //   if (current != lastInputStates[i + 4]) {
+  //     lastInputStates[i + 4] = current;
+  //     changed = true;
+  //   }
+  // }
+
+  return changed;
+}
+
+//---------- Setup OTA update functionality ----------
+void setupOTA() {
+  ArduinoOTA.setPort(3232);                // Set port OTA
+  ArduinoOTA.setHostname("contoh");        // Set hostname
+  ArduinoOTA.setPassword("password");      // Set password OTA
+
+  // Callback when OTA starts
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {
+      type = "filesystem";
+    }
+    Serial.println("Start updating " + type);
+  });
+
+  // Callback when OTA ends
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+
+  // Callback for progress OTA
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+
+  // Callback for OTA error
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
+}
+
+//---------- Main setup function ----------
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17); // PUSR
+  Wire.begin();
+  delay(1000);
+  Serial.println("\n\n==> Starting ESP32 PLC . . . \n");
+
+  EEPROM.begin(EEPROM_SIZE);
+
+  // Initialize PCF8574
+  // if (!pcf8574.begin()) {
+  //   Serial.println("could not initialize...");
+  // }
+  // if (!pcf8574.isConnected()) {
+  //   Serial.println("=> not connected");
+  // } else {
+  //   Serial.println("=> connected!!");
+  // }
+
+  // Initialize pin IO
+  for (int i = 0; i < NUM_INPUTS; i++) {
+    pinMode(INPUT_PINS[i], INPUT_PULLUP);
+  }
+  for (int i = 0; i < NUM_OUTPUTS; i++) {
+    pinMode(OUTPUT_PINS[i], OUTPUT);
+    digitalWrite(OUTPUT_PINS[i], LOW);
+  }
+
+  // Check if EEPROM is initialized
+  if (!isEEPROMInitialized(HARDWARE_ID_ADDR)) {
+    writeToEEPROM(HARDWARE_ID_ADDR, "001");
+    writeToEEPROM(HARDWARE_IP_ADDR, "192.168.1.100");
+    writeToEEPROM(SERVER_IP_ADDR, "192.168.1.91");
+    writeToEEPROM(WIFI_SSID_ADDR, "");
+    writeToEEPROM(WIFI_PASS_ADDR, "");
+    EEPROM.commit();
+  }
+
+  serverIP = readFromEEPROM(SERVER_IP_ADDR);
+  if (serverIP.length() == 0) {
+    serverIP = "192.168.1.91";  // default IP Server
+  }
+
+  hardwareIP = readFromEEPROM(HARDWARE_IP_ADDR);
+  if (hardwareIP.length() == 0) {
+    hardwareIP = "192.168.1.100";  // default IP Hardware
+  }
+
+  hardwareId = readFromEEPROM(HARDWARE_ID_ADDR);
+  if (hardwareId.length() == 0) {
+    hardwareId = "001";  // default Hardware ID
+  }
+
+  String portStr = readFromEEPROM(SERVER_PORT_ADDR);
+  if (portStr.length() == 0) {
+    monitoring_port = 80;  //
+  } else {
+    monitoring_port = portStr.toInt();
+  }
+
+  storedSSID = readFromEEPROM(WIFI_SSID_ADDR);
+  storedPassword = readFromEEPROM(WIFI_PASS_ADDR);
+
+  Serial.println(storedSSID);
+  Serial.println(storedPassword);
+
+  // Try to connect to WiFi if credentials are available
+  if (storedSSID.length() > 0 && storedPassword.length() > 0 && connectToWiFi()) {
+    isAPMode = false;
+    setupOTA();
+    setupWebSocket();
+  } else {
+    setupAP();
+  }
+
+  // Setup route web server
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/auth", HTTP_POST, handleAuth);
+  server.on("/save-config", HTTP_POST, handleSaveConfig);
+  server.begin();
+
+  // Initialize current sensor
+  emon1.current(SCT_013_PIN, nilai_kalibrasi);
+  Serial.println("Configuration IP Server: " + serverIP);
+  Serial.println("Port: " + portStr);
+}
+
+//---------- Main loop function  ----------
+void loop() {
+  ArduinoOTA.handle();    // Handle OTA updates
+  server.handleClient();  // Handle ws web server requests
+  handleSerialInput();
+
+  if (!isAPMode) {        // if not in AP mode
+    webSocket.loop();     // Handle WebSocket
+
+    bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
+    bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
+
+    if (intervalPassed && (checkInputChanges() || forceSendDue)) {
+      sendMonitoringData();
+      lastMonitoringTime = millis();
+      if (forceSendDue) {
+        lastForceSendTime = millis();
+      }
+    }
+  }
+}
+
+//---------- Function to handle current sensor data  ----------
+float readCurrent() {
+  double current = emon1.calcIrms(1480);
+  if (current < 0.01) {
+    current = 0;
+  }
+  char currentStr[6];
+  dtostrf(current, 6, 3, currentStr);  // Konversi ke string dengan 3 desimal
+  return atof(currentStr);             // Konversi kembali ke float
+}
+
+//---------- Function send monitoring data  ----------
+void sendMonitoringData() {
+  StaticJsonDocument<512> doc;  // Create JSON document with enough size
+
+  doc["box_id"] = hardwareId;  // Add hardware ID to JSON
+
+  // Add status input
+  for (int i = 0; i < NUM_INPUTS; i++) {
+    String key = "I" + String(i + 1);
+    doc[key] = digitalRead(INPUT_PINS[i]) ? 0 : 1;
+  }
+  // for (int i = 4; i < NUM_INPUTS + 8; i++) {
+  //   String key = "I" + String(i + 1);
+  //   doc[key] = pcf8574.read(i - 4) ? 1 : 0;
+  // }
+
+  // Add status output
+  for (int i = 0; i < NUM_OUTPUTS; i++) {
+    String key = "O" + String(i + 1);
+    doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
+  }
+
+  // Add current sensor data
+  char currentStr[6];
+  dtostrf(readCurrent(), 0, 2, currentStr);
+  doc["I"] = String(currentStr);
+
+  // Send data to Serial2 and WebSocket
+  String jsonString;
+  serializeJson(doc, jsonString);
+  Serial2.println(jsonString);
+  webSocket.sendTXT(jsonString);
+  Serial.println("Sending data: " + jsonString);
+}
+
+//---------- Function Access Point  ----------
+void setupAP() {
+  WiFi.mode(WIFI_AP);                                                // Set mode WiFi sebagai Access Point
+  WiFi.softAP(ap_ssid, ap_password);                                 // Start Access Point dengan SSID dan password
+  Serial.println("AP Mode: " + WiFi.softAPIP().toString());          // Print IP Access Point
+}
+
+//---------- Function Connect to WiFi  ----------
+bool connectToWiFi() {
+  WiFi.mode(WIFI_STA);  // Set mode Wifi
+
+  // Parse IP address strings to IPAddress objects
+  // IPAddress staticIP;
+  // IPAddress gateway;
+  // IPAddress subnet(255, 255, 255, 0);
+
+  // if (!staticIP.fromString(hardwareIP)) {
+  //     Serial.println("Error: Invalid hardware IP format");
+  //     return false;
+  // }
+
+  // Put gateway IP as the last octet of hardware IP
+  // String gatewayStr = hardwareIP.substring(0, hardwareIP.lastIndexOf('.')) + ".1";
+  // if (!gateway.fromString(gatewayStr)) {
+  //     Serial.println("Error: Invalid gateway IP format");
+  //     return false;
+  // }
+
+  // Configure static IP if needed
+  // if (!WiFi.config(staticIP, gateway, subnet)) {
+  //     Serial.println("Error: Failed to configure Static IP");
+  //     return false;
+  // }
+
+  // Start connecting to WiFi
+  WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
+
+  // Timeout for connection
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 60) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  // Check if connected
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to WiFi!");
+    Serial.println("IP: " + WiFi.localIP().toString());
+    // Verify if the assigned IP matches the configured static IP
+    // if (WiFi.localIP() != staticIP) {
+    //     Serial.println("Warning: Assigned IP different from configured static IP");
+    //     return false;
+    // }
+    return true;
+  }
+  return false;
+}
+
+//---------- Function to setup ws ----------
+void setupWebSocket() {
+  webSocket.begin(serverIP.c_str(), monitoring_port, "/ws"); // Connect to WebSocket server
+  webSocket.onEvent(webSocketEvent);                          // Set callback event
+  Serial.println("WS Client started");
+  Serial.println("Connecting to : " + serverIP);
+}
+
+//---------- Function to handle event WebSocket ----------
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.println("Disconnect from server!");
+      break;
+    case WStype_CONNECTED:
+      Serial.println("Connect to server!");
+      break;
+    case WStype_TEXT:
+      {
+        String data = String((char*)payload);
+        Serial.println("Data received: " + data);
+        Serial.println();
+
+        // Parse data JSON yang diterima
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, data);
+
+        if (error) {
+          Serial.println("Error parsing JSON!");
+          return;
+        }
+
+        // Check if the JSON contains the "box_id" key
+        if (doc.containsKey("box_id")) {
+          String receivedId = doc["box_id"].as<String>();
+
+          // Just process the command if the ID matches
+          if (receivedId == hardwareId) {
+            // Serial.println("for ID : " + hardwareId);
+
+            // Update output states based on the received JSON
+            for (int i = 0; i < NUM_OUTPUTS; i++) {
+              String key = "O" + String(i + 1);
+              if (doc.containsKey(key)) {
+                int state = doc[key].as<int>();
+                digitalWrite(OUTPUT_PINS[i], state == 1 ? HIGH : LOW);
+                // Serial.println("Setting " + key + " to " + (state ? "ON" : "OFF"));
+              }
+            }
+          } else {
+            Serial.println("Ignore commands for ID: " + receivedId);
+          }
+        } else {
+          Serial.println("No box_id in received data!");
+        }
+        break;
+      }
+  }
+}
+
+//---------- Function handle main page ----------
+void handleRoot() {
+  if (!isAuthenticated) {
+    server.send(200, "text/html", loginHTML);  // Show login page if not authenticated
+  } else {
+    // Show configuration page if authenticated
+    String html = String(configHTML);
+    html.replace("%HARDWARE_ID%", hardwareId);
+    html.replace("%HARDWARE_IP%", hardwareIP);
+    html.replace("%SERVER_IP%", serverIP);
+    html.replace("%WIFI_SSID%", storedSSID);
+    html.replace("%WIFI_PASS%", storedPassword);
+    server.send(200, "text/html", html.c_str());
+  }
+}
+
+//---------- Function to check if the user is authenticated ----------
+bool checkAuth(String username, String password) {
+  return (username == default_username && password == default_password);
+}
+
+//---------- Function to handle login form submission ----------
+void handleAuth() {
+  String username = server.arg("username");  // Take username from form
+  String password = server.arg("password");  // Take password from form
+
+  // Check if the username and password are correct
+  if (checkAuth(username, password)) {
+    isAuthenticated = true;
+    server.sendHeader("Location", "/");
+    server.send(302, "text/plain", "");  // Redirect to main page
+  } else {
+    server.send(401, "text/html", loginHTML);  // Show login page with error
+  }
+}
+
+//---------- Function to save configuration ----------
+void handleSaveConfig() {
+  // Check if the user is authenticated
+  if (!isAuthenticated) {
+    server.send(401, "text/html", loginHTML);
+    return;
+  }
+
+  // Take configuration data from form
+  String newHardwareId = server.arg("hardwareId");
+  String newHardwareIP = server.arg("hardwareIP");
+  String newServerIP = server.arg("serverIP");
+  String newSSID = server.arg("ssid");
+  String newPassword = server.arg("password");
+
+  // Validate input data
+  if (newHardwareId.length() > 0 && newHardwareIP.length() > 0 && newServerIP.length() > 0 && newSSID.length() > 0 && newPassword.length() > 0) {
+
+    // Save configuration to EEPROM
+    writeToEEPROM(HARDWARE_ID_ADDR, newHardwareId);
+    writeToEEPROM(HARDWARE_IP_ADDR, newHardwareIP);
+    writeToEEPROM(SERVER_IP_ADDR, newServerIP);
+    writeToEEPROM(WIFI_SSID_ADDR, newSSID);
+    writeToEEPROM(WIFI_PASS_ADDR, newPassword);
+
+    EEPROM.commit();  // Commit changes to EEPROM
+
+    // Update global variables
+    hardwareId = newHardwareId;
+    hardwareIP = newHardwareIP;
+    serverIP = newServerIP;
+    storedSSID = newSSID;
+    storedPassword = newPassword;
+
+    // Show success page
+    server.send(200, "text/html", successHTML);
+    delay(2000);
+    ESP.restart();
+  } else {
+    server.send(400, "text/html", "Input tidak valid");
+  }
+}
+
+//---------- Function to read configuration from EEPROM ----------
+String readFromEEPROM(int address) {
+  String value = "";
+  char c;
+  while ((c = EEPROM.read(address++)) != '\0') {
+    value += c;
+  }
+  return value;
+}
+
+//---------- Function to write configuration to EEPROM ----------
+void writeToEEPROM(int address, String value) {
+  for (int i = 0; i < value.length(); i++) {
+    EEPROM.write(address + i, value[i]);
+  }
+  EEPROM.write(address + value.length(), '\0');  // Add null terminator
+}
+
+
+// Function to handle serial input for configuration
+void handleSerialInput() {
+  static String inputString = "";
+
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      StaticJsonDocument<256> doc;
+      DeserializationError error = deserializeJson(doc, inputString);
+      if (!error) {
+        if (doc.containsKey("server_ip")) {
+          serverIP = doc["server_ip"].as<String>();
+          writeToEEPROM(SERVER_IP_ADDR, serverIP);
+        }
+        if (doc.containsKey("box_id")) {
+          hardwareId = doc["box_id"].as<String>();
+          writeToEEPROM(HARDWARE_ID_ADDR, hardwareId);
+        }
+        if (doc.containsKey("port")) {
+          monitoring_port = doc["port"].as<int>();
+          writeToEEPROM(SERVER_PORT_ADDR, String(monitoring_port));
+        }
+        if (doc.containsKey("hw_ip")) {
+          hardwareIP = doc["hw_ip"].as<String>();
+          writeToEEPROM(HARDWARE_IP_ADDR, hardwareIP);
+        }
+        if (doc.containsKey("ssid")) {
+          storedSSID = doc["ssid"].as<String>();
+          writeToEEPROM(WIFI_SSID_ADDR, storedSSID);
+        }
+        if (doc.containsKey("pass")) {
+          storedPassword = doc["pass"].as<String>();
+          writeToEEPROM(WIFI_PASS_ADDR, storedPassword);
+        }
+
+        EEPROM.commit();
+        Serial.println("==> Configuration saved:");
+        serializeJsonPretty(doc, Serial);
+        Serial.println("\n Restarting ESP32 . . .");
+      } else {
+        Serial.println("==> JSON parsing error: " + String(error.c_str()));
+      }
+      inputString = "";
+    } else {
+      inputString += c;
+    }
+  }
+}
