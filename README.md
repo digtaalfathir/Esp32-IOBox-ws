@@ -1,7 +1,7 @@
 
-# ESP32 PLC WebSocket (esp32-plc-ws)
+# ESP32 IOBOX WebSocket (esp32-iobox-ws)
 
-ESP32 PLC WebSocket (`esp32-plc-ws`) is a versatile firmware designed for ESP32 that enables real-time I/O monitoring and control via WebSocket, OTA updates, and a built-in web interface for configuration. It’s especially suitable for custom PLC applications, remote monitoring systems, or energy monitoring setups using SCT-013 current sensors.
+ESP32 IOBOX WebSocket (`esp32-iobox-ws`) is a versatile firmware designed for ESP32 that enables real-time I/O monitoring and control via WebSocket, OTA updates, and a built-in web interface for configuration. It’s especially suitable for custom IOBOX applications, remote monitoring systems, or energy monitoring setups using SCT-013 current sensors.
 
 ---
 
@@ -30,11 +30,11 @@ ESP32 PLC WebSocket (`esp32-plc-ws`) is a versatile firmware designed for ESP32 
 ## 📂 Folder Structure
 
 ```
-esp32-plc-ws/
-├── esp32-plc-ws.ino             # Main source code
+esp32-iobox-ws/
+├── esp32-iobox-ws.ino           # Main source code
 ├── login-page.h                 # HTML for login
 ├── config-page.h                # HTML for configuration
-├── success-page.h              # HTML after saving config
+├── success-page.h               # HTML after saving config
 └── README.md                    # Project documentation
 ```
 
@@ -117,18 +117,6 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 - `ESPmDNS.h`
 - `Wire.h`
 - `EmonLib.h`
-
----
-
-## 📛 Alternative Name Suggestions
-
-If you want something more descriptive for GitHub:
-
-- `esp32-iobox-ws` → for I/O box via WebSocket
-- `esp32-websocket-plc`
-- `smart-plc-esp32`
-- `iot-relay-websocket-esp32`
-- `esp32-ws-monitoring`
 
 ---
 
