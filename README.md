@@ -132,12 +132,3 @@ If you want something more descriptive for GitHub:
 
 ---
 
-## 📄 License
-
-MIT License – feel free to use, modify, and distribute.
-
----
-
-## 🙋‍♂️ Author
-
-Developed by [Your Name], for customizable ESP32-based monitoring and control.
