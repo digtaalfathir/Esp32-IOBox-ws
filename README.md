@@ -120,3 +120,40 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 
 ---
 
+## ✅ Versi Saat Ini (`v1.0.0`)
+### Fitur yang Sudah Ada:
+- Mode WiFi STA & fallback AP
+- Web UI untuk konfigurasi (login, save, restart)
+- WebSocket Client komunikasi monitoring
+- Pembacaan input/output GPIO
+- Pembacaan sensor arus SCT-013
+- EEPROM konfigurasi tersimpan
+- OTA update (WiFi mode only)
+- Konfigurasi via JSON di Serial
+
+## 📌 Roadmap v1.1.x – v1.2.x
+
+### 🔄 Reconnect & Network Robustness
+- [ ] WiFi reconnect loop saat device dalam mode AP *(DONE Planning)*
+- [ ] WebSocket auto-reconnect setelah disconnect
+- [ ] Validasi format IP Address sebelum disimpan ke EEPROM
+- [ ] Mode dual WiFi (`WIFI_AP_STA`) bila memungkinkan
+
+### ⚙️ Konfigurasi & Maintenance
+- [ ] Reset konfigurasi ke default (factory reset) via tombol fisik
+- [ ] EEPROM Signature / Struktur versi EEPROM agar backward-compatible
+- [ ] Indikator status koneksi via LED (AP / WiFi / Error)
+
+### 🧩 Web UI
+- [ ] Logout / session timeout setelah periode tidak aktif
+- [ ] Halaman OTA manual upload via AP mode (upload bin file)
+- [ ] Indikator status terkoneksi pada halaman UI
+
+### 📦 Data Reliability
+- [ ] Buffer sementara untuk data monitoring saat offline
+- [ ] Mekanisme retry kirim data WebSocket jika gagal
+- [ ] Backup log terakhir dalam EEPROM atau SPIFFS (opsional)
+
+### 🔍 Monitoring & Logging
+- [ ] Tambahkan log ring buffer dalam RAM untuk debugging cepat
+- [ ] Tambahkan waktu RTC jika tersedia (untuk timestamp log)
