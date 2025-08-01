@@ -1,4 +1,3 @@
-
 # ESP32 IOBOX WebSocket (esp32-iobox-ws)
 
 ESP32 IOBOX WebSocket (`esp32-iobox-ws`) is a versatile firmware designed for ESP32 that enables real-time I/O monitoring and control via WebSocket, OTA updates, and a built-in web interface for configuration. It’s especially suitable for custom IOBOX applications, remote monitoring systems, or energy monitoring setups using SCT-013 current sensors.
@@ -8,7 +7,7 @@ ESP32 IOBOX WebSocket (`esp32-iobox-ws`) is a versatile firmware designed for ES
 ## 🚀 Features
 
 - 📶 WiFi Station and Access Point modes
-- 🛜 WebSocket client to send real-time data to a remote server
+- 📡 WebSocket client to send real-time data to a remote server
 - 🌐 Web UI with login authentication and dynamic configuration
 - 🔧 EEPROM-based storage for persistent device settings
 - 🔄 OTA (Over-The-Air) firmware updates
@@ -94,14 +93,14 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 
 ## 🛠 EEPROM Mappings
 
-| Parameter        | Address |
-|------------------|---------|
-| Hardware ID      | 64      |
-| Server IP        | 96      |
-| Hardware IP      | 128     |
-| WiFi SSID        | 160     |
-| WiFi Password    | 192     |
-| Server Port      | 224     |
+| Parameter     | Address |
+| ------------- | ------- |
+| Hardware ID   | 64      |
+| Server IP     | 96      |
+| Hardware IP   | 128     |
+| WiFi SSID     | 160     |
+| WiFi Password | 192     |
+| Server Port   | 224     |
 
 ---
 
@@ -121,7 +120,9 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 ---
 
 ## ✅ Versi Saat Ini (`v1.0.0`)
+
 ### Fitur yang Sudah Ada:
+
 - Mode WiFi STA & fallback AP
 - Web UI untuk konfigurasi (login, save, restart)
 - WebSocket Client komunikasi monitoring
@@ -134,26 +135,31 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 ## 📌 Roadmap v1.1.x – v1.2.x
 
 ### 🔄 Reconnect & Network Robustness
-- [ ] WiFi reconnect loop saat device dalam mode AP *(DONE Planning)*
+
+- [ ] WiFi reconnect loop saat device dalam mode AP _(DONE Planning)_
 - [ ] WebSocket auto-reconnect setelah disconnect
-- [ ] Validasi format IP Address sebelum disimpan ke EEPROM
+- [-] Validasi format IP Address sebelum disimpan ke EEPROM
 - [ ] Mode dual WiFi (`WIFI_AP_STA`) bila memungkinkan
 
 ### ⚙️ Konfigurasi & Maintenance
+
 - [ ] Reset konfigurasi ke default (factory reset) via tombol fisik
 - [ ] EEPROM Signature / Struktur versi EEPROM agar backward-compatible
 - [ ] Indikator status koneksi via LED (AP / WiFi / Error)
 
 ### 🧩 Web UI
+
 - [ ] Logout / session timeout setelah periode tidak aktif
 - [ ] Halaman OTA manual upload via AP mode (upload bin file)
 - [ ] Indikator status terkoneksi pada halaman UI
 
 ### 📦 Data Reliability
+
 - [ ] Buffer sementara untuk data monitoring saat offline
 - [ ] Mekanisme retry kirim data WebSocket jika gagal
 - [ ] Backup log terakhir dalam EEPROM atau SPIFFS (opsional)
 
 ### 🔍 Monitoring & Logging
+
 - [ ] Tambahkan log ring buffer dalam RAM untuk debugging cepat
 - [ ] Tambahkan waktu RTC jika tersedia (untuk timestamp log)

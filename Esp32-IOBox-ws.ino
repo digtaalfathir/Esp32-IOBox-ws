@@ -219,7 +219,7 @@ void setup() {
   }
 
   hardwareIP = readFromEEPROM(HARDWARE_IP_ADDR);
-  if ((hardwareIP.length() == 0)||!isValidIPAddress) {
+  if ((hardwareIP.length() == 0) || !isValidIPAddress) {
     hardwareIP = "192.168.1.100";  // default IP Hardware
     Serial.println("Invalid hardware IP found in EEPROM. Using default: " + hardwareIP);
   }
@@ -247,6 +247,8 @@ void setup() {
     isAPMode = false;
     setupOTA();
     setupWebSocket();
+    Serial.println("Configuration IP Server: " + serverIP);
+    Serial.println("Port: " + portStr);
   } else {
     setupAP();
   }
@@ -259,8 +261,6 @@ void setup() {
 
   // Initialize current sensor
   emon1.current(SCT_013_PIN, nilai_kalibrasi);
-  Serial.println("Configuration IP Server: " + serverIP);
-  Serial.println("Port: " + portStr);
 }
 
 //---------- Main loop function  ----------
