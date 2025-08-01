@@ -162,4 +162,4 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 ### 🔍 Monitoring & Logging
 
 - [ ] Tambahkan log ring buffer dalam RAM untuk debugging cepat
-- [ ] Tambahkan waktu RTC jika tersedia (untuk timestamp log)
+- [x] Tambahkan command untuk monitoring log via Serial dan WS

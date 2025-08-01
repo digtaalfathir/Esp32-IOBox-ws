@@ -180,7 +180,7 @@ void setup() {
   Serial2.begin(115200, SERIAL_8N1, 16, 17); // PUSR
   Wire.begin();
   delay(1000);
-  Serial.println("\n\n==> Starting ESP32 PLC . . . \n");
+  Serial.println("\n==> Starting ESP32 PLC . . . \n");
 
   EEPROM.begin(EEPROM_SIZE);
 
@@ -335,7 +335,8 @@ void sendMonitoringData() {
 void setupAP() {
   WiFi.mode(WIFI_AP);                                                // Set mode WiFi sebagai Access Point
   WiFi.softAP(ap_ssid, ap_password);                                 // Start Access Point dengan SSID dan password
-  Serial.println("AP Mode: " + WiFi.softAPIP().toString());          // Print IP Access Point
+  Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());       // Print IP Access Point
+  Serial.println("Please connect to the Access Point and configure the device.");
 }
 
 //---------- Function Connect to WiFi  ----------
@@ -555,6 +556,23 @@ void handleSerialInput() {
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
+      inputString.trim();
+
+      // Cek apakah input adalah "config"
+      if (inputString.equalsIgnoreCase("config")) {
+        Serial.println("==> Current Configuration:");
+        Serial.println("{");
+        Serial.println("  \"server_ip\": \"" + serverIP + "\",");
+        Serial.println("  \"hw_ip\": \"" + WiFi.localIP().toString() + "\",");
+        Serial.println("  \"box_id\": \"" + hardwareId + "\",");
+        Serial.println("  \"port\": " + String(monitoring_port) + ",");
+        Serial.println("  \"ssid\": \"" + storedSSID + "\",");
+        Serial.println("  \"pass\": \"" + storedPassword + "\"");
+        Serial.println("}");
+        inputString = "";
+        return;
+      }
+
       StaticJsonDocument<256> doc;
       DeserializationError error = deserializeJson(doc, inputString);
       if (!error) {
@@ -590,6 +608,7 @@ void handleSerialInput() {
       } else {
         Serial.println("==> JSON parsing error: " + String(error.c_str()));
       }
+
       inputString = "";
     } else {
       inputString += c;
