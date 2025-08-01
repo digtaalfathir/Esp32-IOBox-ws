@@ -85,6 +85,29 @@ bool isEEPROMInitialized(int address) {
   return value != 255;  // Check if the value is not 255 (uninitialized)
 }
 
+//---------- Helper: Check if IP valid ----------
+bool isValidIPAddress(const String& ip) {
+  int parts = 0;
+  int lastIndex = -1;
+
+  for (int i = 0; i < ip.length(); i++) {
+    if (ip[i] == '.') {
+      String part = ip.substring(lastIndex + 1, i);
+      int num = part.toInt();
+      if (num < 0 || num > 255) return false;
+      parts++;
+      lastIndex = i;
+    }
+  }
+
+  String lastPart = ip.substring(lastIndex + 1);
+  int num = lastPart.toInt();
+  if (num < 0 || num > 255) return false;
+
+  return (parts == 3); // should be exactly 3 dots
+}
+
+
 //---------- Detect changes in input pins ----------
 bool checkInputChanges() {
   bool changed = false;
@@ -196,8 +219,9 @@ void setup() {
   }
 
   hardwareIP = readFromEEPROM(HARDWARE_IP_ADDR);
-  if (hardwareIP.length() == 0) {
+  if ((hardwareIP.length() == 0)||!isValidIPAddress) {
     hardwareIP = "192.168.1.100";  // default IP Hardware
+    Serial.println("Invalid hardware IP found in EEPROM. Using default: " + hardwareIP);
   }
 
   hardwareId = readFromEEPROM(HARDWARE_ID_ADDR);
@@ -268,8 +292,8 @@ float readCurrent() {
     current = 0;
   }
   char currentStr[6];
-  dtostrf(current, 6, 3, currentStr);  // Konversi ke string dengan 3 desimal
-  return atof(currentStr);             // Konversi kembali ke float
+  dtostrf(current, 6, 3, currentStr);
+  return atof(currentStr);
 }
 
 //---------- Function send monitoring data  ----------
