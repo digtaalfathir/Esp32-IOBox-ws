@@ -138,7 +138,7 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 
 - [ ] WiFi reconnect loop saat device dalam mode AP _(DONE Planning)_
 - [ ] WebSocket auto-reconnect setelah disconnect
-- [-] Validasi format IP Address sebelum disimpan ke EEPROM
+- [x] Validasi format IP Address sebelum disimpan ke EEPROM
 - [ ] Mode dual WiFi (`WIFI_AP_STA`) bila memungkinkan
 
 ### ⚙️ Konfigurasi & Maintenance
