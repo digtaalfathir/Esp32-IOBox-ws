@@ -573,6 +573,14 @@ void handleSerialInput() {
         return;
       }
 
+      // Cek apakah input adalah "config"
+      if (inputString.equalsIgnoreCase("restartesp")) {
+        Serial.println("==> Restart ESP32");
+        ESP.restart();
+        inputString = "";
+        return;
+      }
+
       StaticJsonDocument<256> doc;
       DeserializationError error = deserializeJson(doc, inputString);
       if (!error) {
