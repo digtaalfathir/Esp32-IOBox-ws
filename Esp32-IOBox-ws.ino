@@ -558,7 +558,6 @@ void handleSerialInput() {
     if (c == '\n') {
       inputString.trim();
 
-      // Cek apakah input adalah "config"
       if (inputString.equalsIgnoreCase("config")) {
         Serial.println("==> Current Configuration:");
         Serial.println("{");
@@ -573,7 +572,6 @@ void handleSerialInput() {
         return;
       }
 
-      // Cek apakah input adalah "config"
       if (inputString.equalsIgnoreCase("restartesp")) {
         Serial.println("==> Restart ESP32");
         ESP.restart();
@@ -615,6 +613,26 @@ void handleSerialInput() {
         Serial.println("\n Restarting ESP32 . . .");
       } else {
         Serial.println("==> JSON parsing error: " + String(error.c_str()));
+      }
+
+      if (inputString.equalsIgnoreCase("help")) {
+        Serial.println("==> Available commands:");
+        Serial.println("  help           - Show this help message");
+        Serial.println("  config         - Show current configuration");
+        Serial.println("  restartesp     - Restart the ESP32");
+        Serial.println("  <JSON>         - Send new configuration in JSON format");
+        Serial.println("");
+        Serial.println("==> JSON format example:");
+        Serial.println("{");
+        Serial.println("  \"server_ip\": \"192.168.1.100\",  // Server IP address");
+        Serial.println("  \"port\": 80,                      // Port number for monitoring");
+        Serial.println("  \"box_id\": \"001\",               // Unique hardware identifier");
+        Serial.println("  \"hw_ip\": \"192.168.1.50\",       // Static IP address for ESP32");
+        Serial.println("  \"ssid\": \"YourWiFiSSID\",        // WiFi SSID");
+        Serial.println("  \"pass\": \"YourWiFiPassword\"     // WiFi Password");
+        Serial.println("}");
+        inputString = "";
+        return;
       }
 
       inputString = "";
