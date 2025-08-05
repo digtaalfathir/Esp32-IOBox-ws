@@ -249,6 +249,7 @@ void setup() {
     setupWebSocket();
     Serial.println("Configuration IP Server: " + serverIP);
     Serial.println("Port: " + portStr);
+    Serial.println("MAC Address: " + WiFi.macAddress());
   } else {
     setupAP();
   }
@@ -419,10 +420,12 @@ void ensureWiFiConnected() {
 //---------- Function to setup ws ----------
 void setupWebSocket() {
   webSocket.begin(serverIP.c_str(), monitoring_port, "/ws"); // Connect to WebSocket server
-  webSocket.onEvent(webSocketEvent);                          // Set callback event
+  webSocket.onEvent(webSocketEvent);                         // Set callback event
+  webSocket.setReconnectInterval(2000);                      // Reconnect every 2s if disconnected
   Serial.println("WS Client started");
   Serial.println("Connecting to : " + serverIP);
 }
+
 
 //---------- Function to handle event WebSocket ----------
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -592,6 +595,7 @@ void handleSerialInput() {
         Serial.println("  \"port\": " + String(monitoring_port) + ",");
         Serial.println("  \"ssid\": \"" + storedSSID + "\",");
         Serial.println("  \"pass\": \"" + storedPassword + "\"");
+        Serial.println("  \"mac_address\": \"" + WiFi.macAddress() + "\"");
         Serial.println("}");
         inputString = "";
         return;
