@@ -287,7 +287,6 @@ void loop() {
   }
 }
 
-
 //---------- Function to handle current sensor data  ----------
 float readCurrent() {
   double current = emon1.calcIrms(1480);
@@ -338,7 +337,7 @@ void sendMonitoringData() {
 void setupAP() {
   WiFi.mode(WIFI_AP);                                                // Set mode WiFi sebagai Access Point
   WiFi.softAP(ap_ssid, ap_password);                                 // Start Access Point dengan SSID dan password
-  Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());       // Print IP Access Point
+  Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());        // Print IP Access Point
   Serial.println("Please connect to the Access Point and configure the device.");
 }
 

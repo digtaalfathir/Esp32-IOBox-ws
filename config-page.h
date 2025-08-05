@@ -1,97 +1,102 @@
 const char* configHTML = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>IoT Node Configuration</title>
+    <meta charset="UTF-8">
+    <title>Device Configuration</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: Arial, sans-serif;
-        }
         body {
-            background: #f0f2f5;
-            min-height: 100vh;
+            margin: 0;
+            background: #eef1f5;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             display: flex;
             justify-content: center;
             align-items: center;
+            min-height: 100vh;
             padding: 20px;
         }
-        .container {
-            background: white;
+        .config-container {
+            background: #fff;
             padding: 30px;
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 400px;
+            max-width: 500px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.08);
         }
-        h1, h2 {
-            color: #1d4982;
+        h1 {
             text-align: center;
-        }
-        .section-title {
-            margin: 30px 0 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e0e0e0;
-        }
-        .form-group {
+            color: #2a4d9c;
             margin-bottom: 20px;
         }
-        label {
-            display: block;
-            margin-bottom: 8px;
+        .section-title {
+            font-size: 18px;
+            margin-top: 30px;
+            margin-bottom: 15px;
             color: #333;
-            font-weight: bold;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 5px;
+        }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        label {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 6px;
+            color: #444;
         }
         input {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 5px;
-            font-size: 16px;
+            padding: 10px;
+            font-size: 15px;
+            border: 1.5px solid #ccc;
+            border-radius: 6px;
         }
         button {
+            margin-top: 25px;
             width: 100%;
             padding: 12px;
-            background: #1d4982;
-            color: white;
+            background-color: #2a4d9c;
+            color: #fff;
+            font-size: 15px;
             border: none;
-            border-radius: 5px;
-            font-size: 16px;
+            border-radius: 6px;
             cursor: pointer;
-            margin-top: 20px;
+            transition: background 0.3s ease;
+        }
+        button:hover {
+            background-color: #1d397a;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>IoT Node Configuration</h1>
+    <div class="config-container">
+        <h1>Device Configuration</h1>
         <form action="/save-config" method="POST">
-            <h2 class="section-title">Hardware Settings</h2>
+            <div class="section-title">Hardware Settings</div>
             <div class="form-group">
-                <label for="hardwareId">Hardware ID:</label>
+                <label for="hardwareId">Hardware ID</label>
                 <input type="text" id="hardwareId" name="hardwareId" value="%HARDWARE_ID%" required>
             </div>
             <div class="form-group">
-                <label for="hardwareIP">Hardware IP:</label>
+                <label for="hardwareIP">Hardware IP</label>
                 <input type="text" id="hardwareIP" name="hardwareIP" value="%HARDWARE_IP%" required>
             </div>
 
-            <h2 class="section-title">Server Settings</h2>
+            <div class="section-title">Server Settings</div>
             <div class="form-group">
-                <label for="serverIP">Server IP:</label>
+                <label for="serverIP">Server IP</label>
                 <input type="text" id="serverIP" name="serverIP" value="%SERVER_IP%" required>
             </div>
 
-            <h2 class="section-title">WiFi Settings</h2>
+            <div class="section-title">WiFi Settings</div>
             <div class="form-group">
-                <label for="ssid">SSID:</label>
+                <label for="ssid">SSID</label>
                 <input type="text" id="ssid" name="ssid" value="%WIFI_SSID%" required>
             </div>
             <div class="form-group">
-                <label for="password">Password:</label>
+                <label for="password">WiFi Password</label>
                 <input type="password" id="password" name="password" value="%WIFI_PASS%" required>
             </div>
             <button type="submit">Save Configuration</button>

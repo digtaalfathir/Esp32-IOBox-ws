@@ -1,77 +1,76 @@
 const char* loginHTML = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Login</title>
+    <meta charset="UTF-8">
+    <title>Login - Device Access</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: Arial, sans-serif;
-        }
         body {
-            background: #f0f2f5;
-            min-height: 100vh;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #eef1f5;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px;
+            height: 100vh;
         }
-        .container {
-            background: white;
-            padding: 30px;
+        .login-container {
+            background: #fff;
+            padding: 30px 25px;
             border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.08);
             width: 100%;
-            max-width: 400px;
+            max-width: 380px;
         }
-        h1 {
-            color: #1d4982;
+        h2 {
             text-align: center;
-            margin-bottom: 30px;
-            font-size: 24px;
+            margin-bottom: 25px;
+            color: #2a4d9c;
         }
         .form-group {
             margin-bottom: 20px;
         }
         label {
+            font-weight: 600;
+            margin-bottom: 6px;
             display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: bold;
+            color: #444;
         }
         input {
             width: 100%;
             padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 5px;
-            font-size: 16px;
+            border: 1.5px solid #ccc;
+            border-radius: 6px;
+            font-size: 15px;
         }
         button {
             width: 100%;
             padding: 12px;
-            background: #1d4982;
+            background: #2a4d9c;
             color: white;
+            font-size: 15px;
             border: none;
-            border-radius: 5px;
-            font-size: 16px;
+            border-radius: 6px;
             cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        button:hover {
+            background: #1d397a;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Login</h1>
+    <div class="login-container">
+        <h2>Device Login</h2>
         <form action="/auth" method="POST">
             <div class="form-group">
-                <label for="username">Username:</label>
-                <input type="text" id="username" name="username" required>
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" required>
             </div>
             <div class="form-group">
-                <label for="password">Password:</label>
-                <input type="password" id="password" name="password" required>
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" required>
             </div>
             <button type="submit">Login</button>
         </form>
