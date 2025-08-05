@@ -265,12 +265,13 @@ void setup() {
 
 //---------- Main loop function  ----------
 void loop() {
-  ArduinoOTA.handle();    // Handle OTA updates
-  server.handleClient();  // Handle ws web server requests
-  handleSerialInput();
+  ArduinoOTA.handle();        // Handle OTA updates
+  server.handleClient();      // Handle web server requests
+  handleSerialInput();        // Handle serial commands
 
-  if (!isAPMode) {        // if not in AP mode
-    webSocket.loop();     // Handle WebSocket
+  if (!isAPMode) {            // Jika sedang dalam mode WiFi Station (bukan Access Point)
+    ensureWiFiConnected();    // Pastikan koneksi WiFi aktif
+    webSocket.loop();         // Handle WebSocket
 
     bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
     bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
@@ -284,6 +285,7 @@ void loop() {
     }
   }
 }
+
 
 //---------- Function to handle current sensor data  ----------
 float readCurrent() {
@@ -391,6 +393,29 @@ bool connectToWiFi() {
   return false;
 }
 
+//---------- Function to ensure WiFi is connected ----------
+void ensureWiFiConnected() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected. Attempting to reconnect...");
+    WiFi.disconnect(); // Optional, to force fresh reconnect
+    WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
+
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) { // timeout 10s
+      delay(500);
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nReconnected to WiFi!");
+      Serial.println("IP: " + WiFi.localIP().toString());
+    } else {
+      Serial.println("\nFailed to reconnect to WiFi.");
+    }
+  }
+}
+
+
 //---------- Function to setup ws ----------
 void setupWebSocket() {
   webSocket.begin(serverIP.c_str(), monitoring_port, "/ws"); // Connect to WebSocket server
@@ -403,10 +428,10 @@ void setupWebSocket() {
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
-      Serial.println("Disconnect from server!");
+      Serial.println("Disconnect from websocket!");
       break;
     case WStype_CONNECTED:
-      Serial.println("Connect to server!");
+      Serial.println("Connect to websocket!");
       break;
     case WStype_TEXT:
       {
