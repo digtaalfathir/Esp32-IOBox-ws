@@ -4,7 +4,7 @@ const char* configHTML = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <title>Device Configuration</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body {
             margin: 0;
@@ -46,12 +46,26 @@ const char* configHTML = R"rawliteral(
             margin-bottom: 6px;
             color: #444;
         }
-        input {
+        input[type="text"], input[type="password"] {
             width: 100%;
             padding: 10px;
             font-size: 15px;
             border: 1.5px solid #ccc;
             border-radius: 6px;
+        }
+        input[type="checkbox"] {
+            margin-top: 8px;
+        }
+        .show-password {
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+        }
+        .show-password label {
+            margin-left: 6px;
+            font-weight: normal;
+            color: #555;
+            user-select: none;
         }
         button {
             margin-top: 25px;
@@ -96,11 +110,21 @@ const char* configHTML = R"rawliteral(
             </div>
             <div class="form-group">
                 <label for="password">WiFi Password</label>
-                <input type="password" id="password" name="password" value="%WIFI_PASS%" required>
+                <input type="password" id="password" name="password" value="%WIFI_PASS%" required autocomplete="off">
+                <div class="show-password">
+                    <input type="checkbox" id="showPw" onclick="togglePassword()">
+                    <label for="showPw">Show Password</label>
+                </div>
             </div>
             <button type="submit">Save Configuration</button>
         </form>
     </div>
+    <script>
+        function togglePassword() {
+            const pwField = document.getElementById("password");
+            pwField.type = pwField.type === "password" ? "text" : "password";
+        }
+    </script>
 </body>
 </html>
 )rawliteral";
