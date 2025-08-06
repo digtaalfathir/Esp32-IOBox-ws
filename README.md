@@ -136,8 +136,8 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 
 ### 🔄 Reconnect & Network Robustness
 
-- [ ] WiFi reconnect loop saat device dalam mode AP _(DONE Planning)_
-- [ ] WebSocket auto-reconnect setelah disconnect
+- [x] WiFi reconnect loop
+- [x] WebSocket auto-reconnect setelah disconnect
 - [x] Validasi format IP Address sebelum disimpan ke EEPROM
 - [ ] Mode dual WiFi (`WIFI_AP_STA`) bila memungkinkan
 
@@ -155,7 +155,7 @@ ESP32 also receives control commands via WebSocket in the same format to update 
 
 ### 📦 Data Reliability
 
-- [ ] Buffer sementara untuk data monitoring saat offline
+- [x] Buffer sementara untuk data monitoring saat offline
 - [ ] Mekanisme retry kirim data WebSocket jika gagal
 - [ ] Backup log terakhir dalam EEPROM atau SPIFFS (opsional)
 

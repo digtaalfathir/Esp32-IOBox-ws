@@ -83,7 +83,6 @@ const char* configHTML = R"rawliteral(
                 <label for="hardwareIP">Hardware IP</label>
                 <input type="text" id="hardwareIP" name="hardwareIP" value="%HARDWARE_IP%" required>
             </div>
-
             <div class="section-title">Server Settings</div>
             <div class="form-group">
                 <label for="serverIP">Server IP</label>

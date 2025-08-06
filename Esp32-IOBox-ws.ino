@@ -9,12 +9,13 @@
 #include <ArduinoOTA.h>        // Over-The-Air update
 #include "EmonLib.h"           // Energy monitoring library
 #include <Wire.h>              // I2C communication
+#include <vector>
 // #include <PCF8574.h>        // PCF8574 library for I/O expansion
 
 //---------- HTML pages for web interface ----------
-#include "login-page.h"
-#include "config-page.h"
-#include "success-page.h"
+#include "login-page.h"       // Login page
+#include "config-page.h"      // Configuration page
+#include "success-page.h"     // Success page after saving configuration
 
 //---------- EEPROM configuration ----------
 #define EEPROM_SIZE 512       // EEPROM size in bytes
@@ -40,6 +41,8 @@ int monitoring_port = 80;  // Port server monitoring
 String hardwareId = "001";                      // ID hardware
 String serverIP = "192.168.1.91";               // IP server monitoring
 String hardwareIP = "192.168.1.100";            // IP hardware
+std::vector<String> monitoringBuffer;           // Buffer for monitoring data 
+const size_t MAX_BUFFER_SIZE = 100;             // Maximum buffer size for monitoring data
 
 //---------- Input and output pins ----------
 // const int INPUT_PINS[] = { 4, 34, 12, 13 };                            // Pin input
@@ -67,6 +70,8 @@ EnergyMonitor emon1;         // Energy monitoring object
 //---------- WiFi credentials ----------
 String storedSSID = "";      // SSID WiFi
 String storedPassword = "";  // Password WiFi
+bool wifiReconnecting = false;
+unsigned long wifiReconnectStart = 0;
 
 //---------- Timing control ----------
 unsigned long lastMonitoringTime = 0;  // Time of last monitoring data send
@@ -106,7 +111,6 @@ bool isValidIPAddress(const String& ip) {
 
   return (parts == 3); // should be exactly 3 dots
 }
-
 
 //---------- Detect changes in input pins ----------
 bool checkInputChanges() {
@@ -270,8 +274,8 @@ void loop() {
   server.handleClient();      // Handle web server requests
   handleSerialInput();        // Handle serial commands
 
-  if (!isAPMode) {            // Jika sedang dalam mode WiFi Station (bukan Access Point)
-    ensureWiFiConnected();    // Pastikan koneksi WiFi aktif
+  if (!isAPMode) {            // If not in AP mode
+    ensureWiFiConnected();
     webSocket.loop();         // Handle WebSocket
 
     bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
@@ -298,39 +302,55 @@ float readCurrent() {
   return atof(currentStr);
 }
 
-//---------- Function send monitoring data  ----------
-void sendMonitoringData() {
-  StaticJsonDocument<512> doc;  // Create JSON document with enough size
+//---------- Function to bulit monitoring data  ----------
+String buildMonitoringJSON() {
+  StaticJsonDocument<512> doc;
 
-  doc["box_id"] = hardwareId;  // Add hardware ID to JSON
+  doc["box_id"] = hardwareId;
 
-  // Add status input
+  // Input dari pin
   for (int i = 0; i < NUM_INPUTS; i++) {
     String key = "I" + String(i + 1);
     doc[key] = digitalRead(INPUT_PINS[i]) ? 0 : 1;
   }
-  // for (int i = 4; i < NUM_INPUTS + 8; i++) {
-  //   String key = "I" + String(i + 1);
-  //   doc[key] = pcf8574.read(i - 4) ? 1 : 0;
-  // }
 
-  // Add status output
+  // Output status
   for (int i = 0; i < NUM_OUTPUTS; i++) {
     String key = "O" + String(i + 1);
     doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
   }
 
-  // Add current sensor data
   char currentStr[6];
   dtostrf(readCurrent(), 0, 2, currentStr);
   doc["I"] = String(currentStr);
 
-  // Send data to Serial2 and WebSocket
   String jsonString;
   serializeJson(doc, jsonString);
-  Serial2.println(jsonString);
-  webSocket.sendTXT(jsonString);
-  Serial.println("Sending data: " + jsonString);
+  return jsonString;
+}
+
+//---------- Function send monitoring data  ----------
+void sendMonitoringData() {
+  String data = buildMonitoringJSON();
+
+  bool isShootActive = (NUM_INPUTS >= 9) && (digitalRead(INPUT_PINS[8]) == LOW);  // LOW berarti aktif (karena inverted)
+
+  if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
+    webSocket.sendTXT(data);
+    Serial.println("Sending (live): " + data);
+  } else {
+    if (isShootActive) {
+      if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
+        monitoringBuffer.erase(monitoringBuffer.begin());  // Hapus data paling lama
+      }
+      monitoringBuffer.push_back(data);
+      Serial.println("Buffered (offline): " + data);
+    } else {
+      Serial.println("Ignored buffering because shootpin is not active.");
+    }
+  }
+
+  Serial2.println(data);
 }
 
 //---------- Function Access Point  ----------
@@ -395,32 +415,44 @@ bool connectToWiFi() {
 
 //---------- Function to ensure WiFi is connected ----------
 void ensureWiFiConnected() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi disconnected. Attempting to reconnect...");
-    WiFi.disconnect(); // Optional, to force fresh reconnect
-    WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiReconnecting = false;  // Reset flag jika sudah terhubung
+    return;
+  }
 
-    unsigned long startAttemptTime = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) { // timeout 10s
-      delay(500);
-      Serial.print(".");
+  if (!wifiReconnecting) {
+    Serial.println("WiFi disconnected. Starting reconnect...");
+    WiFi.disconnect();
+    WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
+    wifiReconnectStart = millis();
+    wifiReconnecting = true;
+  } else {
+    if (millis() - wifiReconnectStart > 10000) {
+      Serial.println("Reconnect timeout. Failed to connect.");
+      wifiReconnecting = false;  // Stop trying for now
+      return;
     }
 
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint > 500) {
+      Serial.print(".");
+      lastPrint = millis();
+    }
+
+    // Jika reconnect berhasil
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nReconnected to WiFi!");
       Serial.println("IP: " + WiFi.localIP().toString());
-    } else {
-      Serial.println("\nFailed to reconnect to WiFi.");
+      wifiReconnecting = false;
     }
   }
 }
-
 
 //---------- Function to setup ws ----------
 void setupWebSocket() {
   webSocket.begin(serverIP.c_str(), monitoring_port, "/ws"); // Connect to WebSocket server
   webSocket.onEvent(webSocketEvent);                         // Set callback event
-  webSocket.setReconnectInterval(2000);                      // Reconnect every 2s if disconnected
+  webSocket.setReconnectInterval(500);                       // Reconnect every 0.5s if disconnected
   Serial.println("WS Client started");
   Serial.println("Connecting to : " + serverIP);
 }
@@ -434,6 +466,14 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
     case WStype_CONNECTED:
       Serial.println("Connect to websocket!");
+      if (monitoringBuffer.size() > 0) {
+        Serial.println("Reconnected: Sending buffered data...");
+        for (String& bufferedData : monitoringBuffer) {
+          webSocket.sendTXT(bufferedData);
+          delay(50);  // delay to avoid flooding the server
+        }
+        monitoringBuffer.clear();  // Clear the buffer after sending
+      }
       break;
     case WStype_TEXT:
       {
@@ -574,7 +614,6 @@ void writeToEEPROM(int address, String value) {
   }
   EEPROM.write(address + value.length(), '\0');  // Add null terminator
 }
-
 
 // Function to handle serial input for configuration
 void handleSerialInput() {
