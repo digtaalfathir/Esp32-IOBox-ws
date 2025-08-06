@@ -21,7 +21,7 @@ wss.on("connection", function connection(ws, req) {
     console.log(`📩 Received from ESP32: ${message}`);
 
     // (Opsional) Balas kembali
-    // ws.send(`Server received: ${message}`);
+    ws.send(`Server received: ${message}`);
   });
 
   // Event saat client disconnect
