@@ -41,7 +41,7 @@ int monitoring_port = 80;  // Port server monitoring
 String hardwareId = "001";                      // ID hardware
 String serverIP = "192.168.1.91";               // IP server monitoring
 String hardwareIP = "192.168.1.100";            // IP hardware
-std::vector<String> monitoringBuffer;           // Buffer for monitoring data 
+std::vector<String> monitoringBuffer;           // Buffer for monitoring data
 const size_t MAX_BUFFER_SIZE = 100;             // Maximum buffer size for monitoring data
 
 //---------- Input and output pins ----------
@@ -49,8 +49,8 @@ const size_t MAX_BUFFER_SIZE = 100;             // Maximum buffer size for monit
 // const int OUTPUT_PINS[] = { 33, 25, 26, 27 };                          // Pin output
 
 //---------- Input and output pins ----------
-const int INPUT_PINS[] = {4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22};  // Pin input
-const int OUTPUT_PINS[] = {23, 25, 26, 27};                               // Pin output
+const int INPUT_PINS[] = {23, 22, 21, 19, 18, 33, 25, 26, 27, 14, 12, 13};  // Pin input
+const int OUTPUT_PINS[] = {5, 4, 2, 15};                               // Pin output
 const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);        // Sum of input pins
 const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);     // Sum of output pins
 
