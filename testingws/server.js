@@ -17,7 +17,7 @@ wss.on("connection", function connection(ws, req) {
   console.log(`🔗 New client connected from ${clientIP}`);
   clients.push(ws);
 
-  ws.send(JSON.stringify({ message: "Welcome ESP32 Client!" }));
+  ws.send(JSON.stringify({ message: "Welcome!" }));
 
   ws.on("message", function incoming(message) {
     console.log(`📩 Received from ESP32: ${message}`);
@@ -49,7 +49,7 @@ function sendCommand(boxId, outputStates) {
 }
 
 // Contoh: kirim command setiap 5 detik
-setInterval(() => {
-  // Misal: O1 = ON, O2 = OFF, O3 = ON
-  sendCommand(TARGET_BOX_ID, { O1: 1, O2: 0, O3: 1 });
-}, 5000);
+// setInterval(() => {
+//   // Misal: O1 = ON, O2 = OFF, O3 = ON
+//   sendCommand(TARGET_BOX_ID, { O1: 1, O2: 0, O3: 1 });
+// }, 5000);
