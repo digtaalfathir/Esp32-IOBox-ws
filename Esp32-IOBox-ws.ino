@@ -10,7 +10,15 @@
 #include "EmonLib.h"           // Energy monitoring library
 #include <Wire.h>              // I2C communication
 #include <vector>
+#include "time.h"
 // #include <PCF8574.h>        // PCF8574 library for I/O expansion
+
+const String program_version = "v1.0.1";
+
+//---------- Atur NTP server dan zona waktu ----------
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 7 * 3600;  // GMT+7 (WIB)
+const int   daylightOffset_sec = 0;
 
 //---------- HTML pages for web interface ----------
 #include "login-page.h"       // Login page
@@ -49,7 +57,7 @@ const size_t MAX_BUFFER_SIZE = 100;             // Maximum buffer size for monit
 // const int OUTPUT_PINS[] = { 33, 25, 26, 27 };                          // Pin output
 
 //---------- Input and output pins ----------
-const int INPUT_PINS[] = {23, 22, 21, 19, 18, 33, 25, 26, 27, 14, 12, 13};  // Pin input
+const int INPUT_PINS[] = {23, 22, 21, 19, 18, 33, 25, 26, 13, 27, 14, 12};  // Pin input
 const int OUTPUT_PINS[] = {5, 4, 2, 15};                               // Pin output
 const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);        // Sum of input pins
 const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);     // Sum of output pins
@@ -178,13 +186,15 @@ void setupOTA() {
   Serial.println("OTA Ready");
 }
 
+bool lastShootState = false;  // false = tidak aktif (0), true = aktif (1)
+
 //---------- Main setup function ----------
 void setup() {
   Serial.begin(115200);
   Serial2.begin(115200, SERIAL_8N1, 16, 17); // PUSR
   Wire.begin();
   delay(1000);
-  Serial.println("\n==> Starting ESP32 PLC . . . \n");
+  Serial.println("\n==> Starting IoT Node . . . \n");
 
   EEPROM.begin(EEPROM_SIZE);
 
@@ -243,6 +253,7 @@ void setup() {
   storedSSID = readFromEEPROM(WIFI_SSID_ADDR);
   storedPassword = readFromEEPROM(WIFI_PASS_ADDR);
 
+  Serial.println("Try Connect to :");
   Serial.println(storedSSID);
   Serial.println(storedPassword);
 
@@ -251,7 +262,6 @@ void setup() {
     isAPMode = false;
     setupOTA();
     setupWebSocket();
-    Serial.println("Configuration IP Server: " + serverIP);
     Serial.println("Port: " + portStr);
     Serial.println("MAC Address: " + WiFi.macAddress());
   } else {
@@ -266,6 +276,10 @@ void setup() {
 
   // Initialize current sensor
   emon1.current(SCT_013_PIN, nilai_kalibrasi);
+
+  // Sinkronisasi waktu dari NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.println("Time synchronized from NTP.");
 }
 
 //---------- Main loop function  ----------
@@ -303,7 +317,7 @@ float readCurrent() {
 }
 
 //---------- Function to bulit monitoring data  ----------
-String buildMonitoringJSON() {
+String buildMonitoringJSON(bool addTimestamp = false) {
   StaticJsonDocument<512> doc;
 
   doc["box_id"] = hardwareId;
@@ -324,34 +338,82 @@ String buildMonitoringJSON() {
   dtostrf(readCurrent(), 0, 2, currentStr);
   doc["I"] = String(currentStr);
 
+  // Tambahkan timestamp jika diminta
+  if (addTimestamp) {
+    doc["timestamp"] = getTimestamp();
+  }
+
   String jsonString;
   serializeJson(doc, jsonString);
   return jsonString;
 }
 
+String getTimestamp() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return "1970-01-01 00:00:00";  // default kalau gagal
+  }
+
+  char buffer[25];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  return String(buffer);
+}
+
 //---------- Function send monitoring data  ----------
 void sendMonitoringData() {
-  String data = buildMonitoringJSON();
+  String data = buildMonitoringJSON();  // default tanpa timestamp
 
-  bool isShootActive = (NUM_INPUTS >= 9) && (digitalRead(INPUT_PINS[8]) == LOW);  // LOW berarti aktif (karena inverted)
+  // Cek kondisi I9 (input ke-9)
+  bool currentShootState = (NUM_INPUTS >= 9) && (digitalRead(INPUT_PINS[8]) == LOW);  
+  // LOW berarti aktif (inverted), jadi true kalau aktif
 
   if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
+    // Live kirim selalu
     webSocket.sendTXT(data);
     Serial.println("Sending (live): " + data);
   } else {
-    if (isShootActive) {
+    // Deteksi perubahan (edge)
+    if (currentShootState != lastShootState) {
+      // Kalau transisi dari 0 -> 1, simpan snapshot 0 terlebih dulu
+      if (lastShootState == false && currentShootState == true) {
+        String preData = buildMonitoringJSON(true);  
+        // Paksa ubah nilai I9 = 0 pada JSON
+        DynamicJsonDocument tempDoc(512);
+        deserializeJson(tempDoc, preData);
+        tempDoc["I9"] = 0;
+        preData = "";
+        serializeJson(tempDoc, preData);
+
+        if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
+          monitoringBuffer.erase(monitoringBuffer.begin());
+        }
+        monitoringBuffer.push_back(preData);
+
+        Serial.println("Buffered (pre-state 0): " + preData);
+      }
+
+      // Simpan kondisi sekarang (0 atau 1)
+      data = buildMonitoringJSON(true);
+
       if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
         monitoringBuffer.erase(monitoringBuffer.begin());  // Hapus data paling lama
       }
       monitoringBuffer.push_back(data);
-      Serial.println("Buffered (offline): " + data);
+
+      Serial.println("Buffered (state change): " + data);
     } else {
-      Serial.println("Ignored buffering because shootpin is not active.");
+      Serial.println("Ignored buffering (no state change).");
     }
   }
 
+  // Update state terakhir
+  lastShootState = currentShootState;
+
+  // Tetap kirim ke Serial2
   Serial2.println(data);
 }
+
 
 //---------- Function Access Point  ----------
 void setupAP() {
@@ -454,7 +516,7 @@ void setupWebSocket() {
   webSocket.onEvent(webSocketEvent);                         // Set callback event
   webSocket.setReconnectInterval(500);                       // Reconnect every 0.5s if disconnected
   Serial.println("WS Client started");
-  Serial.println("Connecting to : " + serverIP);
+  Serial.println("Connecting to ws server: " + serverIP);
 }
 
 
@@ -466,11 +528,24 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       break;
     case WStype_CONNECTED:
       Serial.println("Connect to websocket!");
+
+      // === Kirim identitas box_id saat pertama kali connect ===
+      {
+        StaticJsonDocument<100> doc;
+        doc["box_id"] = hardwareId;   // misalnya hardwareId = "001"
+        String jsonString;
+        serializeJson(doc, jsonString);
+        webSocket.sendTXT(jsonString);
+        Serial.println("Sent initial JSON: " + jsonString);
+        delay(200);
+      }
+
+      // === Jika ada buffered data, kirim ulang ===
       if (monitoringBuffer.size() > 0) {
         Serial.println("Reconnected: Sending buffered data...");
         for (String& bufferedData : monitoringBuffer) {
           webSocket.sendTXT(bufferedData);
-          delay(50);  // delay to avoid flooding the server
+          delay(200);  // delay to avoid flooding the server
         }
         monitoringBuffer.clear();  // Clear the buffer after sending
       }
@@ -640,6 +715,10 @@ void handleSerialInput() {
       } else if (inputString.equalsIgnoreCase("restartesp")) {
         Serial.println("==> Restart ESP32");
         ESP.restart();
+        inputString = "";
+        return;
+      }  else if (inputString.equalsIgnoreCase("vers")) {
+        Serial.println(program_version);
         inputString = "";
         return;
       } else if (inputString.equalsIgnoreCase("help")) {
