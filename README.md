@@ -83,14 +83,14 @@ Data is sent in JSON format like below every 200 ms or on change:
   "I1": 1,
   "I2": 0,
   ...
-  "O1": 1,
+  "Q1": 1,
   ...
   "I": "0.23"
 }
 ```
 
 - `"I1"` ~ `"I12"`: Digital inputs
-- `"O1"` ~ `"O4"`: Output status
+- `"Q1"` ~ `"Q4"`: Output status
 - `"I"`: Current sensor reading (in Amps)
 
 ESP32 also receives control commands via WebSocket in the same format to update outputs.
