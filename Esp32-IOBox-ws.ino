@@ -9,16 +9,15 @@
 #include <ArduinoOTA.h>        // Over-The-Air update
 #include "EmonLib.h"           // Energy monitoring library
 #include <Wire.h>              // I2C communication
-#include <vector>
-#include "time.h"
-#include <Preferences.h>
-Preferences preferences;
-
+#include <vector>              // For dynamic array (buffer)
+#include "time.h"              // Time library for NTP
 // #include <PCF8574.h>        // PCF8574 library for I/O expansion
 
-const String program_version = "v1.0.2";
+const String program_version = "v1.0.3"; // Program version
+bool readytoSend = false;
+bool init2Ws = false;
 
-//---------- Atur NTP server dan zona waktu ----------
+//---------- Time ----------
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 7 * 3600;  // GMT+7 (WIB)
 const int   daylightOffset_sec = 0;
@@ -38,9 +37,13 @@ const int   daylightOffset_sec = 0;
 #define SERVER_PORT_ADDR 224  // Server port address in EEPROM
 
 //---------- Access Point configuration ----------
-const char* ap_ssid = "Esp32";                  // SSID Access Point
-const char* ap_password = "12345678";           // Password Access Point
-bool isAPMode = true;                           // Status mode AP
+String ap_ssid = "IoT-Node ";                    // SSID Access Point
+const char* ap_password = "12345678";            // Password Access Point
+bool isAPMode = true;                            // Status mode AP
+bool wasOnline = true;                           // Last known online status
+unsigned long apStartTime = 0;
+const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes timeout for AP mode
+unsigned long lastCountdownPrint = 0;
 
 //---------- Configuration PCF8574 ----------
 // PCF8574 pcf8574(0x20);  // Address PCF8574
@@ -91,7 +94,7 @@ unsigned long lastForceSendTime = 0;   // Time of last forced send
 const unsigned long forceSendInterval = 60000;  // Interval for forced send (in milliseconds)
 
 //---------- Default login credentials for web UI ----------
-const char* default_username = "contoh";     // Username default
+const char* default_username = "contoh";    // Username default
 const char* default_password = "password";  // Password default
 bool isAuthenticated = false;               // Authentication status
 
@@ -267,6 +270,9 @@ void setup() {
     setupWebSocket();
     Serial.println("Port: " + portStr);
     Serial.println("MAC Address: " + WiFi.macAddress());
+    // Sinkronisasi waktu dari NTP
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("Time synchronized from NTP.");
   } else {
     setupAP();
   }
@@ -279,31 +285,45 @@ void setup() {
 
   // Initialize current sensor
   emon1.current(SCT_013_PIN, nilai_kalibrasi);
-
-  // Sinkronisasi waktu dari NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  Serial.println("Time synchronized from NTP.");
 }
 
 //---------- Main loop function  ----------
 void loop() {
-  ArduinoOTA.handle();        // Handle OTA updates
-  server.handleClient();      // Handle web server requests
-  handleSerialInput();        // Handle serial commands
+  ArduinoOTA.handle();
+  server.handleClient();
+  handleSerialInput();
 
-  if (!isAPMode) {            // If not in AP mode
+  if (!isAPMode) {
     ensureWiFiConnected();
-    webSocket.loop();         // Handle WebSocket
+    webSocket.loop();
+    if (init2Ws) {
+      bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
+      bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
 
-    bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
-    bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
-
-    if (intervalPassed && (checkInputChanges() || forceSendDue)) {
-      sendMonitoringData();
-      lastMonitoringTime = millis();
-      if (forceSendDue) {
-        lastForceSendTime = millis();
+      if (intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
+        sendMonitoringData();
+        lastMonitoringTime = millis();
+        if (forceSendDue) {
+          lastForceSendTime = millis();
+        }
       }
+    }
+  } else {
+    // === Timeout AP Mode dengan countdown ===
+    unsigned long elapsed = millis() - apStartTime;
+    unsigned long remaining = (apTimeout > elapsed) ? (apTimeout - elapsed) : 0;
+
+    // Print remaining time
+    if (millis() - lastCountdownPrint >= 1000) {
+      Serial.print("AP Mode active, remaining time: ");
+      Serial.print(remaining / 1000);
+      Serial.println(" sec");
+      lastCountdownPrint = millis();
+    }
+
+    if (elapsed > apTimeout) {
+      Serial.println("AP Mode timeout, restarting...");
+      ESP.restart();   // Restart device to try reconnecting to WiFi
     }
   }
 }
@@ -325,7 +345,7 @@ String buildMonitoringJSON(bool addTimestamp = false) {
 
   doc["box_id"] = hardwareId;
 
-  // Input dari pin
+  // Input status
   for (int i = 0; i < NUM_INPUTS; i++) {
     String key = "I" + String(i + 1);
     doc[key] = digitalRead(INPUT_PINS[i]) ? 0 : 1;
@@ -333,18 +353,46 @@ String buildMonitoringJSON(bool addTimestamp = false) {
 
   // Output status
   for (int i = 0; i < NUM_OUTPUTS; i++) {
-    String key = "Q" + String(i + 1);
+    String key = "O" + String(i + 1);
     doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
   }
 
-  char currentStr[6];
-  dtostrf(readCurrent(), 0, 2, currentStr);
-  doc["I"] = String(currentStr);
+  // char currentStr[6];
+  // dtostrf(readCurrent(), 0, 2, currentStr);
+  // doc["I"] = String(currentStr);
 
-  // Tambahkan timestamp jika diminta
+  // Add timestamp if requested
   if (addTimestamp) {
     doc["timestamp"] = getTimestamp();
   }
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+  return jsonString;
+}
+
+String buildDefaultJSON() {
+  StaticJsonDocument<512> doc;
+
+  doc["box_id"] = hardwareId;
+
+  // inputs = 0
+  for (int i = 0; i < NUM_INPUTS; i++) {
+    String key = "I" + String(i + 1);
+    doc[key] = 0;
+  }
+
+  // Outputs = 0
+  for (int i = 0; i < NUM_OUTPUTS; i++) {
+    String key = "O" + String(i + 1);
+    doc[key] = 0;
+  }
+
+  // Current = 0
+  doc["I"] = "0.00";
+
+  // Timestamp
+  doc["timestamp"] = getTimestamp();
 
   String jsonString;
   serializeJson(doc, jsonString);
@@ -355,7 +403,7 @@ String getTimestamp() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Failed to obtain time");
-    return "1970-01-01 00:00:00";  // default kalau gagal
+    return "2025-01-01 00:00:00";  // default timestamp
   }
 
   char buffer[25];
@@ -365,67 +413,51 @@ String getTimestamp() {
 
 //---------- Function send monitoring data  ----------
 void sendMonitoringData() {
-  String data = buildMonitoringJSON();  // default tanpa timestamp
+  bool isOnline = (WiFi.status() == WL_CONNECTED && webSocket.isConnected());
 
-  // Cek kondisi I9 (input ke-9)
-  bool currentShootState = (NUM_INPUTS >= 9) && (digitalRead(INPUT_PINS[8]) == LOW);
-  // LOW berarti aktif (inverted), jadi true kalau aktif
+  // Check for transition from online to offline
+  if (!isOnline && wasOnline) {
+    String defaultData = buildDefaultJSON();
+    if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
+      monitoringBuffer.erase(monitoringBuffer.begin());
+    }
+    monitoringBuffer.push_back(defaultData);
+    Serial.println("Buffered (default snapshot on disconnect): " + defaultData);
+  }
 
-  if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
-    // Live kirim selalu
+  String data = buildMonitoringJSON();  // Normal monitoring data
+
+  if (isOnline) {
+    // === ONLINE ===
     webSocket.sendTXT(data);
     Serial.println("Sending (live): " + data);
   } else {
-    // Deteksi perubahan (edge)
-    if (currentShootState != lastShootState) {
-      // Kalau transisi dari 0 -> 1, simpan snapshot 0 terlebih dulu
-      if (lastShootState == false && currentShootState == true) {
-        String preData = buildMonitoringJSON(true);
-        // Paksa ubah nilai I9 = 0 pada JSON
-        DynamicJsonDocument tempDoc(512);
-        deserializeJson(tempDoc, preData);
-        tempDoc["I9"] = 0;
-        preData = "";
-        serializeJson(tempDoc, preData);
-
-        if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
-          monitoringBuffer.erase(monitoringBuffer.begin());
-        }
-        monitoringBuffer.push_back(preData);
-
-        Serial.println("Buffered (pre-state 0): " + preData);
-      }
-
-      // Simpan kondisi sekarang (0 atau 1)
-      data = buildMonitoringJSON(true);
-
-      if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
-        monitoringBuffer.erase(monitoringBuffer.begin());  // Hapus data paling lama
-      }
-      monitoringBuffer.push_back(data);
-
-      Serial.println("Buffered (state change): " + data);
-    } else {
-      Serial.println("Ignored buffering (no state change).");
+    // === OFFLINE ===
+    String newData = buildMonitoringJSON(true);
+    if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
+      monitoringBuffer.erase(monitoringBuffer.begin());
     }
+    monitoringBuffer.push_back(newData);
+    Serial.println("Buffered (offline): " + newData);
   }
 
-  // Update state terakhir
-  lastShootState = currentShootState;
-
-  // Tetap kirim ke Serial2
+  // Send to Serial2 for PUSR
   Serial2.println(data);
-}
 
+  // Update status
+  wasOnline = isOnline;
+}
 
 //---------- Function Access Point  ----------
 void setupAP() {
-  WiFi.mode(WIFI_AP);                                                // Set mode WiFi sebagai Access Point
-  String apSSID = "IOT-Node-" + hardwareId;
+  WiFi.mode(WIFI_AP);
+  String apSSID = ap_ssid + hardwareId;
   const char* apSSID_c = apSSID.c_str();
   WiFi.softAP(apSSID_c, ap_password);
-  Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());        // Print IP Access Point
+  Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());
   Serial.println("Please connect to the Access Point and configure the device.");
+
+  apStartTime = millis();  // Start timeout timer
 }
 
 //---------- Function Connect to WiFi  ----------
@@ -506,7 +538,7 @@ void ensureWiFiConnected() {
       lastPrint = millis();
     }
 
-    // Jika reconnect berhasil
+    // Check if reconnected
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nReconnected to WiFi!");
       Serial.println("IP: " + WiFi.localIP().toString());
@@ -524,20 +556,20 @@ void setupWebSocket() {
   Serial.println("Connecting to ws server: " + serverIP);
 }
 
-
 //---------- Function to handle event WebSocket ----------
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       Serial.println("Disconnect from websocket!");
+      readytoSend = false;
       break;
     case WStype_CONNECTED:
       Serial.println("Connect to websocket!");
 
-      // === Kirim identitas box_id saat pertama kali connect ===
+      // Send initial JSON with box_id
       {
         StaticJsonDocument<100> doc;
-        doc["box_id"] = hardwareId;   // misalnya hardwareId = "001"
+        doc["box_id"] = hardwareId;
         String jsonString;
         serializeJson(doc, jsonString);
         webSocket.sendTXT(jsonString);
@@ -545,7 +577,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         delay(200);
       }
 
-      // === Jika ada buffered data, kirim ulang ===
+      // Send buffered data if any
       if (monitoringBuffer.size() > 0) {
         Serial.println("Reconnected: Sending buffered data...");
         for (String& bufferedData : monitoringBuffer) {
@@ -554,9 +586,10 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         }
         monitoringBuffer.clear();  // Clear the buffer after sending
       }
+      readytoSend = true;
+      init2Ws = true;
       break;
-    case WStype_TEXT:
-      {
+    case WStype_TEXT: {
         String data = String((char*)payload);
         Serial.println("Data received: " + data);
 
@@ -568,12 +601,11 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           return;
         }
 
-        // === Jika ada perintah dengan box_id & cmd ===
         if (doc.containsKey("box_id") && doc.containsKey("cmd")) {
           String receivedId = doc["box_id"].as<String>();
           String cmd = doc["cmd"].as<String>();
 
-          // === CMD: config (hanya untuk baca config sekarang) ===
+          // === CMD: config ===
           if (receivedId == hardwareId && cmd == "config") {
             StaticJsonDocument<400> resp;
             resp["server_ip"]   = serverIP;
@@ -614,7 +646,6 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           }
         }
 
-        // === Kalau tidak ada CMD, tapi ada data config → update ===
         if (doc.containsKey("box_id")) {
           String receivedId = doc["box_id"].as<String>();
           if (receivedId == hardwareId) {
@@ -642,20 +673,13 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
             }
 
             if (updated) {
-              // Simpan ke Preferences biar persisten
-              preferences.begin("config", false);
-              preferences.putString("server_ip", serverIP);
-              preferences.putInt("port", monitoring_port);
-              preferences.putString("ssid", storedSSID);
-              preferences.putString("pass", storedPassword);
-              preferences.end();
+              // Commit supaya data benar-benar tersimpan
+              EEPROM.commit();
 
               // Konfirmasi ke server
               StaticJsonDocument<200> resp;
               resp["box_id"] = hardwareId;
               resp["status"] = "config_updated";
-
-              EEPROM.commit();
 
               String jsonOut;
               serializeJson(resp, jsonOut);
@@ -669,9 +693,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
               return;
             }
 
-            // === Kalau isinya kontrol output (Q1,Q2,...) ===
             for (int i = 0; i < NUM_OUTPUTS; i++) {
-              String key = "Q" + String(i + 1);
+              String key = "O" + String(i + 1);
               if (doc.containsKey(key)) {
                 int state = doc[key].as<int>();
                 digitalWrite(OUTPUT_PINS[i], state == 1 ? HIGH : LOW);
@@ -681,11 +704,10 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
             Serial.println("Ignore commands for ID: " + receivedId);
           }
         } else {
-          Serial.println("No box_id in received data!");
+          //          Serial.println("No box_id in received data!");
         }
         break;
       }
-
 
   }
 }
