@@ -23,6 +23,7 @@ const long gmtOffset_sec = 7 * 3600; // GMT+7 (WIB)
 const int daylightOffset_sec = 0;
 
 //---------- HTML pages for web interface ----------
+#include "splash-page.h"  // splash page
 #include "login-page.h"   // Login page
 #include "config-page.h"  // Configuration page
 #include "success-page.h" // Success page after saving configuration
@@ -55,7 +56,7 @@ void handleSerialInput();
 #define SERVER_PORT_ADDR 224 // Server port address in EEPROM
 
 //---------- Access Point configuration ----------
-const char *ap_ssid = "Esp32";        // SSID Access Point
+const char *ap_ssid = "IOT-Node-";    // SSID Access Point
 const char *ap_password = "12345678"; // Password Access Point
 bool isAPMode = true;                 // Status mode AP
 
@@ -315,7 +316,10 @@ void setup()
   }
 
   // Setup route web server
-  server.on("/", HTTP_GET, handleRoot);
+  server.on("/", HTTP_GET, []()
+            { server.send(200, "text/html", splashHTML); });
+  server.on("/login", HTTP_GET, []()
+            { server.send(200, "text/html", loginHTML); });
   server.on("/auth", HTTP_POST, handleAuth);
   server.on("/save-config", HTTP_POST, handleSaveConfig);
   server.begin();
@@ -486,7 +490,7 @@ void sendMonitoringData()
 void setupAP()
 {
   WiFi.mode(WIFI_AP); // Set mode WiFi sebagai Access Point
-  String apSSID = "IOT-Node-" + hardwareId;
+  String apSSID = ap_ssid + hardwareId;
   const char *apSSID_c = apSSID.c_str();
   WiFi.softAP(apSSID_c, ap_password);
   Serial.println("\nAP Mode: " + WiFi.softAPIP().toString()); // Print IP Access Point
