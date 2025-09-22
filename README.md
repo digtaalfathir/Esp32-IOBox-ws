@@ -6,7 +6,7 @@ ESP32 IOBOX WebSocket (`esp32-iobox-ws`) is a versatile firmware designed for ES
 
 ## 🖼️ Hardware Preview
 
-<img src="board/board.png" alt="ESP32 IOBOX Board" width="500">
+<img src="board/Design/Screenshot3D/Assembly/board.png" alt="ESP32 IOBOX" width="500">
 
 ---
 
