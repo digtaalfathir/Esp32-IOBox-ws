@@ -46,7 +46,7 @@ const char* configHTML = R"rawliteral(
             margin-bottom: 6px;
             color: #444;
         }
-        input[type="text"], input[type="password"] {
+        input[type="text"], input[type="password"], select {
             width: 100%;
             padding: 10px;
             font-size: 15px;
@@ -93,14 +93,23 @@ const char* configHTML = R"rawliteral(
                 <label for="hardwareId">Hardware ID</label>
                 <input type="text" id="hardwareId" name="hardwareId" value="%HARDWARE_ID%" required>
             </div>
-            <div class="form-group">
-                <label for="hardwareIP">Hardware IP</label>
-                <input type="text" id="hardwareIP" name="hardwareIP" value="%HARDWARE_IP%" required>
-            </div>
+            
             <div class="section-title">Server Settings</div>
             <div class="form-group">
                 <label for="serverIP">Server IP</label>
                 <input type="text" id="serverIP" name="serverIP" value="%SERVER_IP%" required>
+            </div>
+            <div class="form-group">
+                <label for="path">Path Server</label>
+                <input type="text" id="path" name="path" value="%PATH%" required>
+            </div>
+            <div class="form-group">
+                <label for="commMode">Communication Mode</label>
+                <select id="commMode" name="commMode" required>
+                    <option value="ws" %COMM_WS%>WebSocket</option>
+                    <option value="httppost" %COMM_HTTP%>HTTP POST</option>
+                    <option value="mqtt" %COMM_MQTT%>MQTT</option>
+                </select>
             </div>
 
             <div class="section-title">WiFi Settings</div>

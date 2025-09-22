@@ -1,3 +1,0 @@
-DHCP or Static
-Mode Wifi or Lan
-Mode ws, mqtt or, httppost

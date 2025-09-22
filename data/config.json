@@ -1,0 +1,13 @@
+{
+  "hardwareId": "001",
+  "server": {
+    "serverIP": "192.168.1.25",
+    "path": "/"
+  },
+  "monitoringPort": 80,
+  "commMode": "ws",
+  "wifi": {
+    "ssid": "Stechoq Robotika Indonesia",
+    "password": "Stechoq2024"
+  }
+}

@@ -1,80 +1,77 @@
+#include <FS.h>                // File system
+#include "time.h"              // Time library for NTP
 #include <WiFi.h>              // WiFi support
-#include <WebServer.h>         // HTTP Web server
-#include <WebSocketsClient.h>  // WebSocket client
-#include <WebSocketsServer.h>  // WebSocket server
-#include <EEPROM.h>            // EEPROM for storing configuration
-#include <ArduinoJson.h>       // JSON serialization/deserialization
-#include <ESPmDNS.h>           // mDNS responder
-#include <WiFiUdp.h>           // UDP for OTA
-#include <ArduinoOTA.h>        // Over-The-Air update
-#include "EmonLib.h"           // Energy monitoring library
 #include <Wire.h>              // I2C communication
 #include <vector>              // For dynamic array (buffer)
-#include "time.h"              // Time library for NTP
-// #include <PCF8574.h>        // PCF8574 library for I/O expansion
+#include "EmonLib.h"           // Energy monitoring library
+#include <ESPmDNS.h>           // mDNS responder
+#include <WiFiUdp.h>           // UDP for OTA
+#include <PCF8574.h>           // PCF8574 library for I/O expansion
+#include <LittleFS.h>          // File system
+#include <WebServer.h>         // HTTP Web server
+#include <ArduinoJson.h>       // JSON serialization/deserialization
+#include <ArduinoOTA.h>        // Over-The-Air update
+#include <WebSocketsClient.h>  // WebSocket client
+#include <WebSocketsServer.h>  // WebSocket server
+#include "login-page.h"        // Login page
+#include "config-page.h"       // Configuration page
+#include "success-page.h"      // Success page after saving configuration
 
-const String program_version = "v1.0.3"; // Program version
-bool readytoSend = false;
-bool init2Ws = false;
+const String program_version = "v1.0.5"; // Program version
+
+//---------- Configuration structure ----------
+struct Config {
+  String hardwareId;
+  String serverIP;
+  String path;
+  int monitoringPort;
+  String commMode;
+  String wifiSSID;
+  String wifiPass;
+};
+Config config;
 
 //---------- Time ----------
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 7 * 3600;  // GMT+7 (WIB)
 const int   daylightOffset_sec = 0;
 
-//---------- HTML pages for web interface ----------
-#include "login-page.h"       // Login page
-#include "config-page.h"      // Configuration page
-#include "success-page.h"     // Success page after saving configuration
-
-//---------- EEPROM configuration ----------
-#define EEPROM_SIZE 512       // EEPROM size in bytes
-#define HARDWARE_ID_ADDR 64   // Hardware ID address in EEPROM
-#define SERVER_IP_ADDR 96     // Server IP address in EEPROM
-#define HARDWARE_IP_ADDR 128  // Hardware IP address in EEPROM
-#define WIFI_SSID_ADDR 160    // WiFi SSID address in EEPROM
-#define WIFI_PASS_ADDR 192    // Password SSID address in EEPROM
-#define SERVER_PORT_ADDR 224  // Server port address in EEPROM
-
 //---------- Access Point configuration ----------
 String ap_ssid = "IoT-Node ";                    // SSID Access Point
 const char* ap_password = "12345678";            // Password Access Point
 bool isAPMode = true;                            // Status mode AP
 bool wasOnline = true;                           // Last known online status
+bool init2Ws = false;
+bool readytoSend = false;
 unsigned long apStartTime = 0;
-const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes timeout for AP mode
 unsigned long lastCountdownPrint = 0;
+const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes timeout for AP mode
 
 //---------- Configuration PCF8574 ----------
-// PCF8574 pcf8574(0x20);  // Address PCF8574
+PCF8574 pcf8574(0x20);  // Address PCF8574
 
 //---------- Monitoring server configuration ----------
 int monitoring_port = 80;  // Port server monitoring
 
 //---------- Device configuration variables ----------
-String hardwareId = "001";                      // ID hardware
-String serverIP = "192.168.1.91";               // IP server monitoring
-String hardwareIP = "192.168.1.100";            // IP hardware
-std::vector<String> monitoringBuffer;           // Buffer for monitoring data
-const size_t MAX_BUFFER_SIZE = 100;             // Maximum buffer size for monitoring data
+String hardwareId = "001";                        // ID hardware
+String serverIP = "192.168.1.2";                  // IP server monitoring
+String path = "/ws";
+String commMode = "ws";
+std::vector<String> monitoringBuffer;             // Buffer for monitoring data
+const size_t MAX_BUFFER_SIZE = 100;               // Maximum buffer size for monitoring data
 
 //---------- Input and output pins ----------
-// const int INPUT_PINS[] = { 12, 13, 14, 25, 26, 27, 32, 33 };         // Pin input
-// const int OUTPUT_PINS[] = { 4, 15, 16, 17};                          // Pin output
-
-//---------- Input and output pins ----------
-const int INPUT_PINS[] = {12, 13, 14, 25, 26, 27, 32, 33};                // Pin input
-const int OUTPUT_PINS[] = { 4, 15, 16, 17};                               // Pin output
-const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);        // Sum of input pins
-const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);     // Sum of output pins
-
-// const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);     // Sum of input pins
-// const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);  // Sum of output pins
-uint8_t lastInputStates[12] = { 0 };                                      // Array to store last input states
-
-//---------- Current sensor (SCT-013) configuration ----------
-const int SCT_013_PIN = 32;
-float nilai_kalibrasi = 3.15;
+//const int INPUT_PINS[] = {12, 13, 14, 25, 26, 27, 32, 33};                // Pin input
+//const int OUTPUT_PINS[] = {4, 15, 16, 17};                                // Pin output
+const int NUM_GPIO_INPUTS = 4;
+const int NUM_PCF_INPUTS = 8;
+const int INPUT_GPIO_PINS[] = {4, 34, 12, 13};
+const uint8_t PCF_PIN_MAP[NUM_PCF_INPUTS] = {0, 1, 2, 3, 4, 5, 6, 7};
+const int OUTPUT_PINS[] = {33, 25, 26, 27};
+const int NUM_INPUTS = NUM_GPIO_INPUTS + NUM_PCF_INPUTS;                    // Sum of input pins
+const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);       // Sum of output pins
+uint8_t lastInputStates[NUM_INPUTS] = {0};                                  // Array to store last input states
 
 //---------- Object initialization ----------
 WebSocketsClient webSocket;  // WebSocket client
@@ -98,56 +95,96 @@ const char* default_username = "contoh";    // Username default
 const char* default_password = "password";  // Password default
 bool isAuthenticated = false;               // Authentication status
 
-//---------- Helper: Check if EEPROM address has been initialized ----------
-bool isEEPROMInitialized(int address) {
-  byte value = EEPROM.read(address);
-  return value != 255;  // Check if the value is not 255 (uninitialized)
-}
-
-//---------- Helper: Check if IP valid ----------
-bool isValidIPAddress(const String& ip) {
-  int parts = 0;
-  int lastIndex = -1;
-
-  for (int i = 0; i < ip.length(); i++) {
-    if (ip[i] == '.') {
-      String part = ip.substring(lastIndex + 1, i);
-      int num = part.toInt();
-      if (num < 0 || num > 255) return false;
-      parts++;
-      lastIndex = i;
-    }
+bool loadConfig() {
+  File file = LittleFS.open("/config.json", "r");
+  if (!file) {
+    Serial.println("No config file found, using defaults");
+    return false;
   }
 
-  String lastPart = ip.substring(lastIndex + 1);
-  int num = lastPart.toInt();
-  if (num < 0 || num > 255) return false;
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
 
-  return (parts == 3); // should be exactly 3 dots
+  if (error) {
+    Serial.print("Failed to parse config: ");
+    Serial.println(error.c_str());
+    return false;
+  }
+
+  config.hardwareId = doc["hardwareId"].as<String>();
+  config.serverIP = doc["server"]["serverIP"].as<String>();
+  config.path = doc["server"]["path"].as<String>();
+  config.monitoringPort = doc["monitoringPort"].as<int>();
+  config.commMode = doc["commMode"].as<String>();
+  config.wifiSSID = doc["wifi"]["ssid"].as<String>();
+  config.wifiPass = doc["wifi"]["password"].as<String>();
+
+  Serial.println("Config loaded");
+  return true;
+}
+
+bool saveConfig() {
+  StaticJsonDocument<512> doc;
+
+  doc["hardwareId"] = config.hardwareId;
+
+  JsonObject server = doc.createNestedObject("server");
+  server["serverIP"] = config.serverIP;
+  server["path"] = config.path;
+
+  doc["monitoringPort"] = config.monitoringPort;
+  doc["commMode"] = config.commMode;
+
+  JsonObject wifi = doc.createNestedObject("wifi");
+  wifi["ssid"] = config.wifiSSID;
+  wifi["password"] = config.wifiPass;
+
+  File file = LittleFS.open("/config.json", "w");
+  if (!file) {
+    Serial.println("Failed to open config file for writing");
+    return false;
+  }
+
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("Failed to write config");
+    file.close();
+    return false;
+  }
+
+  file.close();
+  Serial.println("Config saved");
+  return true;
 }
 
 //---------- Detect changes in input pins ----------
-bool checkInputChanges() {
+bool checkInputChanges()
+{
   bool changed = false;
 
-  // Check input pins
-  for (int i = 0; i < NUM_INPUTS; i++) {
-    uint8_t current = digitalRead(INPUT_PINS[i]);
-    if (current != lastInputStates[i]) {
+  // GPIO I1..I4
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++)
+  {
+    uint8_t current = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
+    if (current != lastInputStates[i])
+    {
       lastInputStates[i] = current;
       changed = true;
     }
   }
 
-  // Check PCF8574 inputs (if used)
-  // for (int i = 0; i < 8; i++) {
-  //   uint8_t current = pcf8574.read(i);
-  //   if (current != lastInputStates[i + 4]) {
-  //     lastInputStates[i + 4] = current;
-  //     changed = true;
-  //   }
-  // }
-
+  // PCF I5..I12 (urutan 4,5,6,7,0,1,2,3)
+  for (int j = 0; j < NUM_PCF_INPUTS; j++)
+  {
+    uint8_t pin = PCF_PIN_MAP[j];
+    uint8_t current = pcf8574.read(pin) ? 1 : 0;
+    int idx = NUM_GPIO_INPUTS + j; // 4..11
+    if (current != lastInputStates[idx])
+    {
+      lastInputStates[idx] = current;
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -192,174 +229,39 @@ void setupOTA() {
   Serial.println("OTA Ready");
 }
 
-bool lastShootState = false;  // false = tidak aktif (0), true = aktif (1)
-
-//---------- Main setup function ----------
-void setup() {
-  Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, 16, 17); // PUSR
-  Wire.begin();
-  delay(1000);
-  Serial.println("\n==> Starting IoT Node . . . \n");
-
-  EEPROM.begin(EEPROM_SIZE);
-
-  // Initialize PCF8574
-  // if (!pcf8574.begin()) {
-  //   Serial.println("could not initialize...");
-  // }
-  // if (!pcf8574.isConnected()) {
-  //   Serial.println("=> not connected");
-  // } else {
-  //   Serial.println("=> connected!!");
-  // }
-
-  // Initialize pin IO
-  for (int i = 0; i < NUM_INPUTS; i++) {
-    pinMode(INPUT_PINS[i], INPUT_PULLUP);
-  }
-  for (int i = 0; i < NUM_OUTPUTS; i++) {
-    pinMode(OUTPUT_PINS[i], OUTPUT);
-    digitalWrite(OUTPUT_PINS[i], LOW);
-  }
-
-  // Check if EEPROM is initialized
-  if (!isEEPROMInitialized(HARDWARE_ID_ADDR)) {
-    writeToEEPROM(HARDWARE_ID_ADDR, "001");
-    writeToEEPROM(HARDWARE_IP_ADDR, "192.168.1.100");
-    writeToEEPROM(SERVER_IP_ADDR, "192.168.1.91");
-    writeToEEPROM(WIFI_SSID_ADDR, "");
-    writeToEEPROM(WIFI_PASS_ADDR, "");
-    EEPROM.commit();
-  }
-
-  serverIP = readFromEEPROM(SERVER_IP_ADDR);
-  if (serverIP.length() == 0) {
-    serverIP = "192.168.1.91";  // default IP Server
-  }
-
-  hardwareIP = readFromEEPROM(HARDWARE_IP_ADDR);
-  if ((hardwareIP.length() == 0) || !isValidIPAddress) {
-    hardwareIP = "192.168.1.100";  // default IP Hardware
-    Serial.println("Invalid hardware IP found in EEPROM. Using default: " + hardwareIP);
-  }
-
-  hardwareId = readFromEEPROM(HARDWARE_ID_ADDR);
-  if (hardwareId.length() == 0) {
-    hardwareId = "001";  // default Hardware ID
-  }
-
-  String portStr = readFromEEPROM(SERVER_PORT_ADDR);
-  if (portStr.length() == 0) {
-    monitoring_port = 80;  //
-  } else {
-    monitoring_port = portStr.toInt();
-  }
-
-  storedSSID = readFromEEPROM(WIFI_SSID_ADDR);
-  storedPassword = readFromEEPROM(WIFI_PASS_ADDR);
-
-  Serial.println("Try Connect to :");
-  Serial.println(storedSSID);
-  Serial.println(storedPassword);
-
-  // Try to connect to WiFi if credentials are available
-  if (storedSSID.length() > 0 && storedPassword.length() > 0 && connectToWiFi()) {
-    isAPMode = false;
-    setupOTA();
-    setupWebSocket();
-    Serial.println("Port: " + portStr);
-    Serial.println("MAC Address: " + WiFi.macAddress());
-    // Sinkronisasi waktu dari NTP
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Serial.println("Time synchronized from NTP.");
-  } else {
-    setupAP();
-  }
-
-  // Setup route web server
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/auth", HTTP_POST, handleAuth);
-  server.on("/save-config", HTTP_POST, handleSaveConfig);
-  server.begin();
-
-  // Initialize current sensor
-  emon1.current(SCT_013_PIN, nilai_kalibrasi);
-}
-
-//---------- Main loop function  ----------
-void loop() {
-  ArduinoOTA.handle();
-  server.handleClient();
-  handleSerialInput();
-
-  if (!isAPMode) {
-    ensureWiFiConnected();
-    webSocket.loop();
-    if (init2Ws) {
-      bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
-      bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
-
-      if (intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
-        sendMonitoringData();
-        lastMonitoringTime = millis();
-        if (forceSendDue) {
-          lastForceSendTime = millis();
-        }
-      }
-    }
-  } else {
-    // === Timeout AP Mode dengan countdown ===
-    unsigned long elapsed = millis() - apStartTime;
-    unsigned long remaining = (apTimeout > elapsed) ? (apTimeout - elapsed) : 0;
-
-    // Print remaining time
-    if (millis() - lastCountdownPrint >= 1000) {
-      Serial.print("AP Mode active, remaining time: ");
-      Serial.print(remaining / 1000);
-      Serial.println(" sec");
-      lastCountdownPrint = millis();
-    }
-
-    if (elapsed > apTimeout) {
-      Serial.println("AP Mode timeout, restarting...");
-      ESP.restart();   // Restart device to try reconnecting to WiFi
-    }
-  }
-}
-
-//---------- Function to handle current sensor data  ----------
-float readCurrent() {
-  double current = emon1.calcIrms(1480);
-  if (current < 0.01) {
-    current = 0;
-  }
-  char currentStr[6];
-  dtostrf(current, 6, 3, currentStr);
-  return atof(currentStr);
-}
-
 //---------- Function to bulit monitoring data  ----------
 String buildMonitoringJSON(bool addTimestamp = false) {
   StaticJsonDocument<512> doc;
 
   doc["box_id"] = hardwareId;
 
-  // Input status
-  for (int i = 0; i < NUM_INPUTS; i++) {
-    String key = "I" + String(i + 1);
-    doc[key] = digitalRead(INPUT_PINS[i]) ? 0 : 1;
+  // I1..I4 dari GPIO
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++)
+  {
+    String key = "I" + String(i + 1);                     // I1..I4
+    int rawVal = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0; // HIGH=1, LOW=0
+    // int val = rawVal ? 0 : 1; // Inverted logic
+    int val = rawVal;
+    doc[key] = val;
   }
 
-  // Output status
-  for (int i = 0; i < NUM_OUTPUTS; i++) {
+  // I5..I12 dari PCF8574 dengan urutan 4,5,6,7,0,1,2,3
+  for (int j = 0; j < NUM_PCF_INPUTS; j++)
+  {
+    String key = "I" + String(NUM_GPIO_INPUTS + j + 1); // I5..I12
+    uint8_t pin = PCF_PIN_MAP[j];
+    int rawVal = pcf8574.read(pin) ? 1 : 0;
+    // int val = rawVal ? 0 : 1; // Inverted logic
+    int val = rawVal;
+    doc[key] = val;
+  }
+
+  // STATUS OUTPUT
+  for (int i = 0; i < NUM_OUTPUTS; i++)
+  {
     String key = "O" + String(i + 1);
     doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
   }
-
-  // char currentStr[6];
-  // dtostrf(readCurrent(), 0, 2, currentStr);
-  // doc["I"] = String(currentStr);
 
   // Add timestamp if requested
   if (addTimestamp) {
@@ -464,35 +366,12 @@ void setupAP() {
 bool connectToWiFi() {
   WiFi.mode(WIFI_STA);  // Set mode Wifi
 
-  // Parse IP address strings to IPAddress objects
-  // IPAddress staticIP;
-  // IPAddress gateway;
-  // IPAddress subnet(255, 255, 255, 0);
-
-  // if (!staticIP.fromString(hardwareIP)) {
-  //     Serial.println("Error: Invalid hardware IP format");
-  //     return false;
-  // }
-
-  // Put gateway IP as the last octet of hardware IP
-  // String gatewayStr = hardwareIP.substring(0, hardwareIP.lastIndexOf('.')) + ".1";
-  // if (!gateway.fromString(gatewayStr)) {
-  //     Serial.println("Error: Invalid gateway IP format");
-  //     return false;
-  // }
-
-  // Configure static IP if needed
-  // if (!WiFi.config(staticIP, gateway, subnet)) {
-  //     Serial.println("Error: Failed to configure Static IP");
-  //     return false;
-  // }
-
   // Start connecting to WiFi
   WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
 
   // Timeout for connection
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 60) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 60) { // Timeout 60 seconds
     delay(500);
     Serial.print(".");
     attempts++;
@@ -502,11 +381,6 @@ bool connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nConnected to WiFi!");
     Serial.println("IP: " + WiFi.localIP().toString());
-    // Verify if the assigned IP matches the configured static IP
-    // if (WiFi.localIP() != staticIP) {
-    //     Serial.println("Warning: Assigned IP different from configured static IP");
-    //     return false;
-    // }
     return true;
   }
   return false;
@@ -515,7 +389,7 @@ bool connectToWiFi() {
 //---------- Function to ensure WiFi is connected ----------
 void ensureWiFiConnected() {
   if (WiFi.status() == WL_CONNECTED) {
-    wifiReconnecting = false;  // Reset flag jika sudah terhubung
+    wifiReconnecting = false;  // Flag to indicate not reconnecting
     return;
   }
 
@@ -549,7 +423,7 @@ void ensureWiFiConnected() {
 
 //---------- Function to setup ws ----------
 void setupWebSocket() {
-  webSocket.begin(serverIP.c_str(), monitoring_port, "/ws"); // Connect to WebSocket server
+  webSocket.begin(serverIP.c_str(), monitoring_port, path); // Connect to WebSocket server
   webSocket.onEvent(webSocketEvent);                         // Set callback event
   webSocket.setReconnectInterval(500);                       // Reconnect every 0.5s if disconnected
   Serial.println("WS Client started");
@@ -609,6 +483,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
           if (receivedId == hardwareId && cmd == "config") {
             StaticJsonDocument<400> resp;
             resp["server_ip"]   = serverIP;
+            resp["path"]        = path;
             resp["hw_ip"]       = WiFi.localIP().toString();
             resp["box_id"]      = hardwareId;
             resp["port"]        = monitoring_port;
@@ -653,28 +528,33 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
             if (doc.containsKey("server_ip")) {
               serverIP = doc["server_ip"].as<String>();
-              writeToEEPROM(SERVER_IP_ADDR, serverIP);
+              config.serverIP = serverIP;
+              updated = true;
+            }
+            if (doc.containsKey("path")) {
+              serverIP = doc["path"].as<String>();
+              config.path = path;
               updated = true;
             }
             if (doc.containsKey("port")) {
               monitoring_port = doc["port"].as<int>();
-              writeToEEPROM(SERVER_PORT_ADDR, String(monitoring_port));
+              config.monitoringPort = monitoring_port;
               updated = true;
             }
             if (doc.containsKey("ssid")) {
               storedSSID = doc["ssid"].as<String>();
-              writeToEEPROM(WIFI_SSID_ADDR, storedSSID);
+              config.wifiSSID  = storedSSID;
               updated = true;
             }
             if (doc.containsKey("pass")) {
               storedPassword = doc["pass"].as<String>();
-              writeToEEPROM(WIFI_PASS_ADDR, storedPassword);
+              config.wifiPass  = storedPassword;
               updated = true;
             }
 
             if (updated) {
               // Commit supaya data benar-benar tersimpan
-              EEPROM.commit();
+              saveConfig();
 
               // Konfirmasi ke server
               StaticJsonDocument<200> resp;
@@ -704,7 +584,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
             Serial.println("Ignore commands for ID: " + receivedId);
           }
         } else {
-          //          Serial.println("No box_id in received data!");
+          // Serial.println("No box_id in received data!");
         }
         break;
       }
@@ -720,8 +600,8 @@ void handleRoot() {
     // Show configuration page if authenticated
     String html = String(configHTML);
     html.replace("%HARDWARE_ID%", hardwareId);
-    html.replace("%HARDWARE_IP%", hardwareIP);
     html.replace("%SERVER_IP%", serverIP);
+    html.replace("%PATH%", path);
     html.replace("%WIFI_SSID%", storedSSID);
     html.replace("%WIFI_PASS%", storedPassword);
     server.send(200, "text/html", html.c_str());
@@ -742,9 +622,9 @@ void handleAuth() {
   if (checkAuth(username, password)) {
     isAuthenticated = true;
     server.sendHeader("Location", "/");
-    server.send(302, "text/plain", "");  // Redirect to main page
+    server.send(302, "text/plain", "");      // Redirect to main page
   } else {
-    server.send(401, "text/html", loginHTML);  // Show login page with error
+    server.send(401, "text/html", loginHTML);// Show login page with error
   }
 }
 
@@ -758,55 +638,30 @@ void handleSaveConfig() {
 
   // Take configuration data from form
   String newHardwareId = server.arg("hardwareId");
-  String newHardwareIP = server.arg("hardwareIP");
   String newServerIP = server.arg("serverIP");
+  String newPath = server.arg("path");
+  String newcommMode = server.arg("commMode");
   String newSSID = server.arg("ssid");
   String newPassword = server.arg("password");
 
   // Validate input data
-  if (newHardwareId.length() > 0 && newHardwareIP.length() > 0 && newServerIP.length() > 0 && newSSID.length() > 0 && newPassword.length() > 0) {
+  if (newHardwareId.length() > 0 && newServerIP.length() > 0 && newSSID.length() > 0 && newPassword.length() > 0) {
 
-    // Save configuration to EEPROM
-    writeToEEPROM(HARDWARE_ID_ADDR, newHardwareId);
-    writeToEEPROM(HARDWARE_IP_ADDR, newHardwareIP);
-    writeToEEPROM(SERVER_IP_ADDR, newServerIP);
-    writeToEEPROM(WIFI_SSID_ADDR, newSSID);
-    writeToEEPROM(WIFI_PASS_ADDR, newPassword);
-
-    EEPROM.commit();  // Commit changes to EEPROM
-
-    // Update global variables
-    hardwareId = newHardwareId;
-    hardwareIP = newHardwareIP;
-    serverIP = newServerIP;
-    storedSSID = newSSID;
-    storedPassword = newPassword;
+    config.hardwareId = newHardwareId;
+    config.serverIP = newServerIP;
+    config.path = newPath;
+    config.commMode = newcommMode;
+    config.wifiSSID = newSSID;
+    config.wifiPass = newPassword;
+    saveConfig();
 
     // Show success page
     server.send(200, "text/html", successHTML);
-    delay(2000);
+    delay(1000);
     ESP.restart();
   } else {
     server.send(400, "text/html", "Input tidak valid");
   }
-}
-
-//---------- Function to read configuration from EEPROM ----------
-String readFromEEPROM(int address) {
-  String value = "";
-  char c;
-  while ((c = EEPROM.read(address++)) != '\0') {
-    value += c;
-  }
-  return value;
-}
-
-//---------- Function to write configuration to EEPROM ----------
-void writeToEEPROM(int address, String value) {
-  for (int i = 0; i < value.length(); i++) {
-    EEPROM.write(address + i, value[i]);
-  }
-  EEPROM.write(address + value.length(), '\0');  // Add null terminator
 }
 
 // Function to handle serial input for configuration
@@ -816,18 +671,41 @@ void handleSerialInput() {
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
-      inputString.trim();
+      inputString.trim(); 
 
       if (inputString.equalsIgnoreCase("config")) {
         Serial.println("==> Current Configuration:");
         Serial.println("{");
         Serial.println("  \"server_ip\": \"" + serverIP + "\",");
-        Serial.println("  \"hw_ip\": \"" + WiFi.localIP().toString() + "\",");
+        Serial.println("  \"path\": \"" + path + "\",");
         Serial.println("  \"box_id\": \"" + hardwareId + "\",");
         Serial.println("  \"port\": " + String(monitoring_port) + ",");
+        Serial.println("  \"commMode\": \"" + commMode + "\",");
         Serial.println("  \"ssid\": \"" + storedSSID + "\",");
         Serial.println("  \"pass\": \"" + storedPassword + "\"");
         Serial.println("  \"mac_address\": \"" + WiFi.macAddress() + "\"");
+        int rssi = WiFi.RSSI();
+        String signalQuality;
+        if (rssi > -60) {
+          signalQuality = "Good";
+        } else if (rssi > -75) {
+          signalQuality = "Fair";
+        } else {
+          signalQuality = "Weak";
+        }
+        Serial.println("  \"wifi_rssi_dbm\": " + String(rssi) + ",");
+        Serial.println("  \"wifi_quality\": \"" + signalQuality + "\",");
+        int estimatedSpeed = 0;
+        if (rssi > -60) {
+          estimatedSpeed = 72;
+        } else if (rssi > -70) {
+          estimatedSpeed = 36;
+        } else if (rssi > -80) {
+          estimatedSpeed = 12;
+        } else {
+          estimatedSpeed = 1;
+        }
+        Serial.println("  \"wifi_speed_mbps\": " + String(estimatedSpeed));
         Serial.println("}");
         inputString = "";
         return;
@@ -850,9 +728,10 @@ void handleSerialInput() {
         Serial.println("==> JSON format example:");
         Serial.println("{");
         Serial.println("  \"server_ip\": \"192.168.1.100\",  // Server IP address");
-        Serial.println("  \"port\": 80,                    // Port number for monitoring");
+        Serial.println("  \"path\": \"/ws\",                 // Path Server");
+        Serial.println("  \"port\": 80,                      // Port number for monitoring");
         Serial.println("  \"box_id\": \"001\",               // Unique hardware identifier");
-        Serial.println("  \"hw_ip\": \"192.168.1.50\",       // Static IP address for ESP32");
+        Serial.println("  \"commMode\": \"ws\",             // Static IP address for ESP32");
         Serial.println("  \"ssid\": \"YourWiFiSSID\",        // WiFi SSID");
         Serial.println("  \"pass\": \"YourWiFiPassword\"     // WiFi Password");
         Serial.println("}");
@@ -865,40 +744,189 @@ void handleSerialInput() {
       if (!error) {
         if (doc.containsKey("server_ip")) {
           serverIP = doc["server_ip"].as<String>();
-          writeToEEPROM(SERVER_IP_ADDR, serverIP);
+          config.serverIP = serverIP;
+        }
+        if (doc.containsKey("path")) {
+          serverIP = doc["path"].as<String>();
+          config.path = path;
         }
         if (doc.containsKey("box_id")) {
           hardwareId = doc["box_id"].as<String>();
-          writeToEEPROM(HARDWARE_ID_ADDR, hardwareId);
+          config.hardwareId = hardwareId;
         }
         if (doc.containsKey("port")) {
           monitoring_port = doc["port"].as<int>();
-          writeToEEPROM(SERVER_PORT_ADDR, String(monitoring_port));
+          config.monitoringPort = monitoring_port;
         }
-        if (doc.containsKey("hw_ip")) {
-          hardwareIP = doc["hw_ip"].as<String>();
-          writeToEEPROM(HARDWARE_IP_ADDR, hardwareIP);
+        if (doc.containsKey("commMode")) {
+          commMode = doc["commMode"].as<String>();
+          config.commMode = commMode;
         }
         if (doc.containsKey("ssid")) {
           storedSSID = doc["ssid"].as<String>();
-          writeToEEPROM(WIFI_SSID_ADDR, storedSSID);
+          config.wifiSSID = storedSSID;
         }
         if (doc.containsKey("pass")) {
           storedPassword = doc["pass"].as<String>();
-          writeToEEPROM(WIFI_PASS_ADDR, storedPassword);
+          config.wifiPass = storedPassword;
         }
 
-        EEPROM.commit();
+        saveConfig();
         Serial.println("==> Configuration saved:");
         serializeJsonPretty(doc, Serial);
         Serial.println("\n Restarting ESP32 . . .");
       } else {
         Serial.println("==> JSON parsing error: " + String(error.c_str()));
       }
-
       inputString = "";
     } else {
       inputString += c;
+    }
+  }
+}
+
+//---------- Main setup function ----------
+void setup() {
+  Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17); // PUSR
+  Wire.begin();
+  delay(1000);
+  Serial.println("\n==> Starting IoT Node . . . \n");
+
+  if (!LittleFS.begin()) Serial.println("Failed mount config");
+  else Serial.println("Config mounted");
+
+  if (!loadConfig()) {
+    // Default config if no config file
+    Serial.println("Using default configuration");
+    config.hardwareId = "001";
+    config.serverIP = "192.168.1.2";
+    config.serverIP = "/ws";
+    config.monitoringPort = 8080;
+    config.commMode = "ws";
+    config.wifiSSID = "BayMax";
+    config.wifiPass = "11111111";
+    saveConfig();
+  }
+
+  Serial.println("Box ID: " + config.hardwareId);
+  Serial.println("Server IP: " + config.serverIP);
+  Serial.println("Path: " + config.path);
+  Serial.println("Monitoring Port: " + String(config.monitoringPort));
+  Serial.println("Comm Mode: " + config.commMode);
+  Serial.println("WiFi SSID: " + config.wifiSSID);
+  Serial.println("WiFi Pass: " + config.wifiPass);
+
+  // Copy config to variables
+  hardwareId = config.hardwareId;
+  serverIP = config.serverIP;
+  path = config.path;
+  String portStr = String(config.monitoringPort);
+  if (portStr.length() == 0) monitoring_port = 80;
+  else monitoring_port = portStr.toInt();
+  commMode = config.commMode;
+  Serial.println("Comm Mode Active: " + config.commMode);
+  storedSSID = config.wifiSSID;
+  storedPassword = config.wifiPass;
+
+  // Initialize PCF8574
+  if (!pcf8574.begin()) Serial.println("PCF8574: Failed begin()");
+  if (!pcf8574.isConnected()) Serial.println("PCF8574: not connected!");
+  else Serial.println("PCF8574: Connected");
+
+  pcf8574.write8(0xFF); // Set all pins HIGH
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++) // Input GPIO
+  {
+    pinMode(INPUT_GPIO_PINS[i], INPUT);
+  }
+
+  for (int i = 0; i < NUM_OUTPUTS; i++) // Output GPIO
+  {
+    pinMode(OUTPUT_PINS[i], OUTPUT);
+    digitalWrite(OUTPUT_PINS[i], LOW);
+  }
+
+  // Initial State
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++)
+  {
+    lastInputStates[i] = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
+  }
+  uint8_t s = pcf8574.read8();
+  for (int j = 0; j < NUM_PCF_INPUTS; j++)
+  {
+    uint8_t pin = PCF_PIN_MAP[j];
+    lastInputStates[NUM_GPIO_INPUTS + j] = (s >> pin) & 0x01;
+  }
+
+  // Try to connect to WiFi if credentials are available
+  if (storedSSID.length() > 0 && storedPassword.length() > 0 && connectToWiFi()) {
+    Serial.println("Try Connect Wifi :");
+    isAPMode = false;
+    setupOTA();
+    Serial.println("Port: " + portStr);
+    Serial.println("MAC Address: " + WiFi.macAddress());
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("Time synchronized from NTP.");
+  } else {
+    setupAP();
+  }
+
+  if (!isAPMode) {
+    if (commMode == "ws") setupWebSocket();
+    //    else if (commMode == "httppost") setupHTTPClient();
+    //    else if (commMode == "mqtt") setupMQTTClient();
+  }
+
+  // Setup route web server
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/auth", HTTP_POST, handleAuth);
+  server.on("/save-config", HTTP_POST, handleSaveConfig);
+  server.begin();
+}
+
+//---------- Main loop function  ----------
+void loop() {
+  ArduinoOTA.handle();
+  server.handleClient();
+  handleSerialInput();
+
+  if (!isAPMode) {
+    ensureWiFiConnected();
+    webSocket.loop();
+    if (commMode == "ws") {
+      if (init2Ws) {
+        bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
+        bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
+
+        if (intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
+          sendMonitoringData();
+          lastMonitoringTime = millis();
+          if (forceSendDue) lastForceSendTime = millis();
+        }
+      }
+    }
+    else if (commMode == "httppost") {
+      Serial.println("Mode HTTP");
+      }
+    else if (commMode == "mqtt") {
+      Serial.println("Mode MQTT");
+      }
+  } else {
+    // === Timeout AP Mode with countdown ===
+    unsigned long elapsed = millis() - apStartTime;
+    unsigned long remaining = (apTimeout > elapsed) ? (apTimeout - elapsed) : 0;
+
+    // Print remaining time
+    if (millis() - lastCountdownPrint >= 1000) {
+      Serial.print("AP Mode active, remaining time: ");
+      Serial.print(remaining / 1000);
+      Serial.println(" sec");
+      lastCountdownPrint = millis();
+    }
+
+    if (elapsed > apTimeout) {
+      Serial.println("AP Mode timeout, restarting...");
+      ESP.restart();   // Restart device to try reconnecting to WiFi
     }
   }
 }
