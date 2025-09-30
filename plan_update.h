@@ -1,9 +1,8 @@
 Tambahkan path di web ui (done)
 commMode dibuat dropdown di UI (done)
-Manual Control Output via WebUI ()
-bisa download config.json di webui ()
+bisa download config.json di webui (done)
 Mode ws, mqtt or, httppost, + failover ()
 trigger pin output dari input ()
 trigger Scheduler pin Output ()
-
-
+Manual Control Output via WebUI (done)
+buatkan web uploader ()

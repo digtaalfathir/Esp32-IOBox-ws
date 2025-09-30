@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IoT Node</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    body {
+      margin: 0;
+      background: #eef1f5;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+    }
+    .navbar {
+      display: flex;
+      background: #2a4d9c;
+      color: #fff;
+      justify-content: center;
+    }
+    .navbar button {
+      flex: 1;
+      padding: 15px;
+      border: none;
+      background: #2a4d9c;
+      color: #fff;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    .navbar button.active {
+      background: #1d397a;
+    }
+    .tab-content {
+      display: none;
+      padding: 20px;
+      max-width: 600px;
+      margin: auto;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    .config-container {
+      background: #fff;
+      padding: 25px;
+      border-radius: 10px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    }
+    h1 {
+      text-align: center;
+      color: #2a4d9c;
+      margin-bottom: 20px;
+    }
+    .form-group { margin-bottom: 18px; }
+    label { font-weight: 600; display: block; margin-bottom: 6px; color: #444; }
+    input[type="text"], input[type="password"], select {
+      width: 100%; padding: 10px; font-size: 15px;
+      border: 1.5px solid #ccc; border-radius: 6px;
+    }
+    button.submit-btn {
+      margin-top: 25px;
+      width: 100%;
+      padding: 12px;
+      background-color: #2a4d9c;
+      color: #fff;
+      font-size: 15px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    button.submit-btn:hover { background-color: #1d397a; }
+
+    /* Control buttons */
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 15px;
+      margin-top: 20px;
+    }
+    .output-btn {
+      padding: 15px;
+      border: none;
+      border-radius: 8px;
+      background: #f0f0f0;
+      cursor: pointer;
+      font-weight: 600;
+      color: #333;
+      transition: background 0.3s;
+    }
+    .output-btn.on { background: #4CAF50; color: #fff; }
+    .output-btn.off { background: #f44336; color: #fff; }
+  </style>
+</head>
+<body>
+  <!-- Navigation -->
+  <div class="navbar">
+    <button id="tabConfig" class="active" onclick="showTab('config')">Configuration</button>
+    <button id="tabControl" onclick="showTab('control')">Control</button>
+  </div>
+
+  <!-- Config Tab -->
+  <div id="config" class="tab-content active">
+    <div class="config-container">
+      <h1>Device Configuration</h1>
+      <form action="/save-config" method="POST">
+        <div class="form-group">
+          <label for="hardwareId">Hardware ID</label>
+          <input type="text" id="hardwareId" name="hardwareId" value="%HARDWARE_ID%" required>
+        </div>
+        <div class="form-group">
+          <label for="serverIP">Server IP</label>
+          <input type="text" id="serverIP" name="serverIP" value="%SERVER_IP%" required>
+        </div>
+        <div class="form-group">
+          <label for="path">Path Server</label>
+          <input type="text" id="path" name="path" value="%PATH%" required>
+        </div>
+        <div class="form-group">
+          <label for="commMode">Communication Mode</label>
+          <select id="commMode" name="commMode" required>
+            <option value="ws" %COMM_WS%>WebSocket</option>
+            <option value="httppost" %COMM_HTTP%>HTTP POST</option>
+            <option value="mqtt" %COMM_MQTT%>MQTT</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="ssid">SSID</label>
+          <input type="text" id="ssid" name="ssid" value="%WIFI_SSID%" required>
+        </div>
+        <div class="form-group">
+          <label for="password">WiFi Password</label>
+          <input type="password" id="password" name="password" value="%WIFI_PASS%" required autocomplete="off">
+          <div>
+            <input type="checkbox" id="showPw" onclick="togglePassword()">
+            <label for="showPw">Show Password</label>
+          </div>
+        </div>
+        <button type="submit" class="submit-btn">Save Configuration</button>
+        <button type="button" class="submit-btn" onclick="window.location.href='/download-config'">Download Config</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Control Tab -->
+  <div id="control" class="tab-content">
+    <div class="config-container">
+      <h1>Output Control</h1>
+      <div class="output-grid">
+        <button class="output-btn off" onclick="toggleOutput(0, this)">O1</button>
+        <button class="output-btn off" onclick="toggleOutput(1, this)">O2</button>
+        <button class="output-btn off" onclick="toggleOutput(2, this)">O3</button>
+        <button class="output-btn off" onclick="toggleOutput(3, this)">O4</button>
+      </div>
+      <div class="config-container">
+      <h1>Automation Rules</h1>
+        <div id="ruleList"></div>
+        <button onclick="addRuleForm()">+ Add Rule</button>
+    </div>
+  </div>
+
+  <script>
+    function showTab(tab) {
+      document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".navbar button").forEach(el => el.classList.remove("active"));
+      document.getElementById(tab).classList.add("active");
+      document.getElementById("tab" + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add("active");
+    }
+    function togglePassword() {
+      const pwField = document.getElementById("password");
+      pwField.type = pwField.type === "password" ? "text" : "password";
+    }
+    function toggleOutput(pin, el) {
+      const newState = el.classList.contains("on") ? "off" : "on";
+      fetch(`/toggle?pin=${pin}&state=${newState}`, {method:"POST"})
+        .then(() => {
+          el.classList.toggle("on", newState==="on");
+          el.classList.toggle("off", newState==="off");
+        });
+    }
+  </script>
+</body>
+</html>

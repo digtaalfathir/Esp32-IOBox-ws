@@ -1,13 +1,14 @@
 {
   "hardwareId": "001",
   "server": {
-    "serverIP": "192.168.1.25",
-    "path": "/"
+    "serverIP": "iotnodeserver.duckdns.org",
+    "path": "/wsiot"
   },
   "monitoringPort": 80,
   "commMode": "ws",
   "wifi": {
     "ssid": "Stechoq Robotika Indonesia",
     "password": "Stechoq2024"
-  }
+  },
+  "rules": []
 }
