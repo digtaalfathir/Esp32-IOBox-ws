@@ -42,6 +42,9 @@
         border: 1.5px solid #ccc;
         border-radius: 6px;
         font-size: 15px;
+
+        /* Menambahkan box-sizing agar padding tidak merusak layout */
+        box-sizing: border-box; 
       }
       button {
         width: 100%;
@@ -57,6 +60,21 @@
       button:hover {
         background: #1d397a;
       }
+      /* Style untuk checkbox 'Show Password' */
+      .show-password-container {
+        display: flex;
+        align-items: center;
+        margin-top: 10px;
+      }
+      .show-password-container input {
+        width: auto;
+        margin-right: 8px;
+      }
+      .show-password-container label {
+        margin-bottom: 0;
+        font-weight: normal;
+        color: #555;
+      }
     </style>
   </head>
   <body>
@@ -70,9 +88,29 @@
         <div class="form-group">
           <label for="password">Password</label>
           <input id="password" name="password" type="password" required />
-        </div>
+          <div class="show-password-container">
+            <input type="checkbox" onclick="togglePassword()" id="showPw">
+            <label for="showPw">Show Password</label>
+          </div>
+          </div>
         <button type="submit">Login</button>
       </form>
     </div>
-  </body>
+
+    <script>
+      function togglePassword() {
+        // Ambil elemen input password
+        const passwordField = document.getElementById("password");
+
+        // Cek tipe input saat ini
+        if (passwordField.type === "password") {
+          // Jika tipenya 'password', ubah menjadi 'text' agar terlihat
+          passwordField.type = "text";
+        } else {
+          // Jika tipenya 'text', kembalikan menjadi 'password' agar tersembunyi
+          passwordField.type = "password";
+        }
+      }
+    </script>
+    </body>
 </html>

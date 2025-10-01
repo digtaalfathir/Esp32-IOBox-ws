@@ -1,17 +1,17 @@
-#include "time.h"              // Time library for NTP
-#include <WiFi.h>              // WiFi support
-#include <Wire.h>              // I2C communication
-#include <vector>              // For dynamic array (buffer)
-#include <PCF8574.h>           // PCF8574 library for I/O expansion
-#include <LittleFS.h>          // File system
-#include <WebServer.h>         // HTTP Web server
-#include <ArduinoOTA.h>        // Over-The-Air update
-#include <HTTPClient.h>        // 
-#include <ArduinoJson.h>       // JSON serialization/deserialization
-#include <PubSubClient.h>      // 
+#include "time.h"            // Time library for NTP
+#include <WiFi.h>            // WiFi support
+#include <Wire.h>            // I2C communication
+#include <vector>            // For dynamic array (buffer)
+#include <PCF8574.h>         // PCF8574 library for I/O expansion
+#include <LittleFS.h>        // File system
+#include <WebServer.h>       // HTTP Web server
+#include <ArduinoOTA.h>      // Over-The-Air update
+#include <HTTPClient.h>      // HTTP Post
+#include <ArduinoJson.h>     // JSON serialization/deserialization
+#include <PubSubClient.h>    // MQTT
 #include <WebSocketsClient.h>  // WebSocket client
 
-const String program_version = "v1.1.0"; // Program version
+const String program_version = "v1.1.1"; // Program version
 
 //---------- Configuration structure ----------
 struct Config {
@@ -24,9 +24,13 @@ struct Config {
   String wifiPass;
 };
 Config config;
-WebSocketsClient webSocket;  // WebSocket client
-WebServer server(80);        // Web server on port 80
-PCF8574 pcf8574(0x20);       // Address PCF8574
+
+//---------- Object initialization ----------
+WebServer server(80);
+PCF8574 pcf8574(0x20);
+WiFiClient wifiClient;
+WebSocketsClient webSocket;
+PubSubClient mqttClient(wifiClient);
 
 //---------- Time ----------
 const char* ntpServer = "pool.ntp.org";
@@ -34,19 +38,21 @@ const long  gmtOffset_sec = 7 * 3600;  // GMT+7 (WIB)
 const int   daylightOffset_sec = 0;
 
 //---------- Wifi & Access Point configuration ----------
-String ap_ssid = "IoT-Node ";                    // SSID Access Point
-const char* ap_password = "12345678";            // Password Access Point
-bool isAPMode = true;                            // Status mode AP
+String ap_ssid = "IoT-Node ";
+const char* ap_password = "12345678";
+bool isAPMode = true;
+
 bool readytoSend = false;
 bool wifiReconnecting = false;
 unsigned long apStartTime = 0;
 unsigned long lastCountdownPrint = 0;
 unsigned long wifiReconnectStart = 0;
-const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes timeout for AP mode
+
+const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes
 
 //---------- Device configuration variables ----------
-std::vector<String> monitoringBuffer;            // Buffer for monitoring data
-const size_t MAX_BUFFER_SIZE = 100;              // Maximum buffer size for monitoring data
+std::vector<String> monitoringBuffer;
+const size_t MAX_BUFFER_SIZE = 100;
 
 //---------- Input and output pins ----------
 const int NUM_GPIO_INPUTS = 4;
@@ -54,15 +60,16 @@ const int NUM_PCF_INPUTS = 8;
 const int INPUT_GPIO_PINS[] = {4, 34, 12, 13};
 const uint8_t PCF_PIN_MAP[NUM_PCF_INPUTS] = {0, 1, 2, 3, 4, 5, 6, 7};
 const int OUTPUT_PINS[] = {33, 25, 26, 27};
+
 const int NUM_INPUTS = NUM_GPIO_INPUTS + NUM_PCF_INPUTS;                    // Sum of input pins
 const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);       // Sum of output pins
 uint8_t lastInputStates[NUM_INPUTS] = {0};                                  // Array to store last input states
 
 //---------- Timing control ----------
-unsigned long lastMonitoringTime = 0;  // Time of last monitoring data send
-const long monitoringInterval = 200;   // Interval for sending monitoring data (in milliseconds)
-unsigned long lastForceSendTime = 0;   // Time of last forced send
-const unsigned long forceSendInterval = 60000;  // Interval for forced send (in milliseconds)
+unsigned long lastMonitoringTime = 0;
+const long monitoringInterval = 200;
+unsigned long lastForceSendTime = 0;
+const unsigned long forceSendInterval = 60000;
 
 //---------- Default login credentials for web UI ----------
 const char* default_username = "contoh";    // Username default
@@ -99,32 +106,25 @@ bool loadConfig() {
 
 bool saveConfig() {
   StaticJsonDocument<512> doc;
-
   doc["hardwareId"] = config.hardwareId;
-
   JsonObject server = doc.createNestedObject("server");
   server["serverIP"] = config.serverIP;
   server["path"] = config.path;
-
   doc["monitoringPort"] = config.monitoringPort;
   doc["commMode"] = config.commMode;
-
   JsonObject wifi = doc.createNestedObject("wifi");
   wifi["ssid"] = config.wifiSSID;
   wifi["password"] = config.wifiPass;
-
   File file = LittleFS.open("/config.json", "w");
   if (!file) {
     Serial.println("Failed to open config file for writing");
     return false;
   }
-
   if (serializeJson(doc, file) == 0) {
     Serial.println("Failed to write config");
     file.close();
     return false;
   }
-
   file.close();
   Serial.println("Config saved");
   return true;
@@ -141,19 +141,98 @@ String loadFile(const char* path) {
   return content;
 }
 
-//---------- Function to setup ws ----------
-void setupWebSocket() {
-  webSocket.begin(config.serverIP.c_str(), config.monitoringPort, config.path); // Connect to WebSocket server
-  webSocket.onEvent(webSocketEvent);                                            // Set callback event
-  webSocket.setReconnectInterval(500);                                          // Reconnect every 0.5s if disconnected
+//---------- data konfigurasi ----------
+String buildConfigJSON() {
+  StaticJsonDocument<512> doc;
+
+  // Mengambil data dari struct Config, mirip dengan saveConfig()
+  doc["hardwareId"] = config.hardwareId;
+
+  JsonObject server = doc.createNestedObject("server");
+  server["serverIP"] = config.serverIP;
+  server["path"] = config.path;
+
+  doc["monitoringPort"] = config.monitoringPort;
+  doc["commMode"] = config.commMode;
+
+  JsonObject wifi = doc.createNestedObject("wifi");
+  wifi["ssid"] = config.wifiSSID;
+  // Catatan: Password tidak dikirim untuk keamanan
+
+  // Menambahkan data status perangkat yang berguna
+  doc["ip_address"] = WiFi.localIP().toString();
+  doc["mac_address"] = WiFi.macAddress();
+  doc["firmware_version"] = program_version;
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+  return jsonString;
 }
 
-//---------- Function to setup httppost ----------
+//-------------- kirim data ke broker MQTT ---------------
+void publishConfigMQTT() {
+  String configData = buildConfigJSON();
+  String configTopic = "iot-node/" + config.hardwareId + "/status";
+
+  if (mqttClient.publish(configTopic.c_str(), configData.c_str())) {
+    Serial.println("--- Configuration Sent via MQTT ---");
+    Serial.println("Topic: " + configTopic);
+    Serial.println("Payload: " + configData);
+    Serial.println("-----------------------------------");
+  } else {
+    Serial.println("Failed to publish config to MQTT.");
+  }
+}
+
+//-------------- Callback pesan MQTT ---------------
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Pesan diterima di topik MQTT: ");
+  Serial.println(topic);
+}
+
+//-------------- Reconnect MQTT ---------------
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Mencoba terhubung ke MQTT Broker...");
+    Serial.printf(" | Free Heap: %d bytes\n", ESP.getFreeHeap());
+
+    String clientId = "iot-node-" + config.hardwareId + "-" + String(random(0, 1000));
+    if (mqttClient.connect(clientId.c_str())) {
+      Serial.println("Terhubung!");
+      // Kirim data config setiap kali berhasil terhubung
+      publishConfigMQTT();
+      // Subscribe ke topik command (opsional)
+      String commandTopic = "iot-node/" + config.hardwareId + "/command";
+      mqttClient.subscribe(commandTopic.c_str());
+    } else {
+      Serial.print("Gagal, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Coba lagi dalam 5 detik");
+      delay(5000);
+    }
+  }
+}
+
+//-------------- setup MQTT ---------------
+void setupMQTTClient() {
+  Serial.println("Communication Mode: MQTT (Standard TCP)");
+  mqttClient.setServer(config.serverIP.c_str(), config.monitoringPort);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);//ukuran buffer
+
+  readytoSend = true;
+}
+
+void setupWebSocket() {
+  webSocket.begin(config.serverIP.c_str(), config.monitoringPort, config.path);
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(500);
+}
+
 void setupHttppost() {
   Serial.println("HTTP POST Mode initialized");
   readytoSend = true;
 
-  // === Send initial JSON with box_id ===
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     String url = "http://" + config.serverIP + ":" + String(config.monitoringPort) + config.path;
@@ -179,7 +258,6 @@ void setupHttppost() {
   }
 }
 
-
 //---------- Function Access Point  ----------
 void setupAP() {
   WiFi.mode(WIFI_AP);
@@ -188,10 +266,10 @@ void setupAP() {
   WiFi.softAP(apSSID_c, ap_password);
   Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());
   Serial.println("Please connect to the Access Point and configure the device.");
+
   apStartTime = millis();  // Start timeout timer
 }
 
-//---------- Setup OTA update functionality ----------
 void setupOTA() {
   ArduinoOTA.setPort(3232);                        // Set port OTA
   ArduinoOTA.setHostname(default_username);        // Set hostname
@@ -204,18 +282,12 @@ void setupOTA() {
     else type = "filesystem";
     Serial.println("Start updating " + type);
   });
-
-  // Callback when OTA ends
   ArduinoOTA.onEnd([]() {
     Serial.println("\nEnd");
   });
-
-  // Callback for progress OTA
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
-
-  // Callback for OTA error
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
@@ -224,21 +296,16 @@ void setupOTA() {
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
-
   ArduinoOTA.begin();
   Serial.println("OTA Ready");
 }
-
-
 
 //---------- Function Connect to WiFi  ----------
 bool connectToWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
-
-  // Timeout for connection
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 60) { // Timeout 60 seconds
+  while (WiFi.status() != WL_CONNECTED && attempts < 60) {
     delay(500);
     Serial.print(".");
     attempts++;
@@ -256,10 +323,9 @@ bool connectToWiFi() {
 //---------- Function to ensure WiFi is connected ----------
 void ensureWiFiConnected() {
   if (WiFi.status() == WL_CONNECTED) {
-    wifiReconnecting = false;  // Flag to indicate not reconnecting
+    wifiReconnecting = false;
     return;
   }
-
   if (!wifiReconnecting) {
     Serial.println("WiFi disconnected. Starting reconnect...");
     WiFi.disconnect();
@@ -269,17 +335,14 @@ void ensureWiFiConnected() {
   } else {
     if (millis() - wifiReconnectStart > 10000) {
       Serial.println("Reconnect timeout. Failed to connect.");
-      wifiReconnecting = false;  // Stop trying for now
+      wifiReconnecting = false;
       return;
     }
-
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 500) {
       Serial.print(".");
       lastPrint = millis();
     }
-
-    // Check if reconnected
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nReconnected to WiFi!");
       Serial.println("IP: " + WiFi.localIP().toString());
@@ -332,7 +395,7 @@ String buildMonitoringJSON(bool addTimestamp = false, bool defaultMode = false) 
     }
     // Semua output = 0
     for (int i = 0; i < NUM_OUTPUTS; i++) {
-      String key = "O" + String(i + 1);
+      String key = "Q" + String(i + 1);
       doc[key] = 0;
     }
     // Current = 0
@@ -355,7 +418,7 @@ String buildMonitoringJSON(bool addTimestamp = false, bool defaultMode = false) 
 
     // Status output
     for (int i = 0; i < NUM_OUTPUTS; i++) {
-      String key = "O" + String(i + 1);
+      String key = "Q" + String(i + 1);
       doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
     }
   }
@@ -413,9 +476,9 @@ void sendMonitoringData() {
       }
       http.end();
     }
-    //    } else if (isMQTT) {
-    //      Serial.println("Sending via MQTT (not implemented yet): " + data);
-    //    }
+    else if (isMQTT) {
+      Serial.println("Sending via MQTT (not implemented yet): " + data);
+    }
   }
   // === OFFLINE ===
   else {
@@ -427,7 +490,6 @@ void sendMonitoringData() {
     Serial.println("Buffered (offline): " + newData);
   }
 }
-
 
 //---------- Function to handle event WebSocket ----------
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -455,9 +517,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         Serial.println("Reconnected: Sending buffered data...");
         for (String& bufferedData : monitoringBuffer) {
           webSocket.sendTXT(bufferedData);
-          delay(200);  // delay to avoid flooding the server
+          delay(200);
         }
-        monitoringBuffer.clear();  // Clear the buffer after sending
+        monitoringBuffer.clear();
       }
       readytoSend = true;
       break;
@@ -581,7 +643,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
             Serial.println("Ignore commands for ID: " + receivedId);
           }
         } else {
-          // Serial.println("No box_id in received data!");
+          Serial.println("No box_id in received data!");
         }
         break;
       }
@@ -597,6 +659,7 @@ void handleRoot() {
     String html = String(loadFile("/config-page.html"));
     html.replace("%HARDWARE_ID%", config.hardwareId);
     html.replace("%SERVER_IP%", config.serverIP);
+    html.replace("%SERVER_PORT%", String(config.monitoringPort));
     html.replace("%PATH%", config.path);
     html.replace("%WIFI_SSID%", config.wifiSSID);
     html.replace("%WIFI_PASS%", config.wifiPass);
@@ -822,11 +885,10 @@ void setupCommMode() {
   if (!isAPMode) {
     if (config.commMode == "ws") setupWebSocket();
     else if (config.commMode == "httppost") setupHttppost();
-    //    else if (config.commMode == "mqtt") setupMQTTClient();
+    else if (config.commMode == "mqtt") setupMQTTClient(); // Diaktifkan
   }
 }
 
-// Setup route web server
 void setupRoutes() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/auth", HTTP_POST, handleAuth);
@@ -868,10 +930,8 @@ void setup() {
   delay(1000);
 
   Serial.println("\n==> Starting IoT Node . . . \n");
-
   if (!LittleFS.begin()) Serial.println("Failed mount config");
   else Serial.println("Config mounted");
-
   if (!loadConfig()) Serial.println("Config file not found");;
 
   Serial.println("Box ID: " + config.hardwareId);
@@ -897,17 +957,22 @@ void loop() {
   if (!isAPMode) {
     ensureWiFiConnected();
     if (config.commMode == "ws") webSocket.loop();
+    if (config.commMode == "mqtt") {
+      if (!mqttClient.connected()) {
+        reconnectMQTT();
+      }
+      mqttClient.loop();
+    }
 
     bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
     bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
 
-    if (intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
+    if (config.commMode != "mqtt" && intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
       sendMonitoringData();
       lastMonitoringTime = millis();
       if (forceSendDue) lastForceSendTime = millis();
     }
-  }
-  else {
+  } else {
     handleAPModeTimeout();
   }
 }
