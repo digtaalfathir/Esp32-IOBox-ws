@@ -1,17 +1,17 @@
-#include "time.h"            // Time library for NTP
-#include <WiFi.h>            // WiFi support
-#include <Wire.h>            // I2C communication
-#include <vector>            // For dynamic array (buffer)
-#include <PCF8574.h>         // PCF8574 library for I/O expansion
-#include <LittleFS.h>        // File system
-#include <WebServer.h>       // HTTP Web server
-#include <ArduinoOTA.h>      // Over-The-Air update
-#include <HTTPClient.h>      // HTTP Post
-#include <ArduinoJson.h>     // JSON serialization/deserialization
-#include <PubSubClient.h>    // MQTT
-#include <WebSocketsClient.h>  // WebSocket client
+#include <time.h>         // Time library for NTP
+#include <WiFi.h>         // WiFi support
+#include <Wire.h>         // I2C communication
+#include <vector>         // For dynamic array (buffer)
+#include <PCF8574.h>      // PCF8574 library for I/O expansion
+#include <LittleFS.h>     // File system
+#include <WebServer.h>    // HTTP Web server
+#include <ArduinoOTA.h>   // Over-The-Air update
+#include <HTTPClient.h>   // HTTP Post
+#include <ArduinoJson.h>  // JSON serialization/deserialization
+#include <PubSubClient.h>   // MQTT
+#include <WebSocketsClient.h> // WebSocket client
 
-const String program_version = "v1.1.1"; // Program version
+const String program_version = "v1.1.2"; // Program version
 
 //---------- Configuration structure ----------
 struct Config {
@@ -22,6 +22,7 @@ struct Config {
   String commMode;
   String wifiSSID;
   String wifiPass;
+  String accessToken;
 };
 Config config;
 
@@ -48,38 +49,40 @@ unsigned long apStartTime = 0;
 unsigned long lastCountdownPrint = 0;
 unsigned long wifiReconnectStart = 0;
 
-const unsigned long apTimeout = 3 * 60 * 1000UL; // 3 minutes
+const unsigned long apTimeout = 3 * 60 * 1000; // 3 minutes
 
 //---------- Device configuration variables ----------
 std::vector<String> monitoringBuffer;
 const size_t MAX_BUFFER_SIZE = 100;
 
-//---------- Input and output pins ----------
-const int NUM_GPIO_INPUTS = 4;
+//---------- Input and output pins (UPDATED) ----------
 const int NUM_PCF_INPUTS = 8;
-const int INPUT_GPIO_PINS[] = {4, 34, 12, 13};
+const int NUM_GPIO_INPUTS = 8;
+// Input 1-8: PCF8574 pins 0-7
 const uint8_t PCF_PIN_MAP[NUM_PCF_INPUTS] = {0, 1, 2, 3, 4, 5, 6, 7};
-const int OUTPUT_PINS[] = {33, 25, 26, 27};
+// Input 9-16: ESP32 GPIO pins
+const int INPUT_GPIO_PINS[NUM_GPIO_INPUTS] = {32, 33, 25, 26, 27, 14, 12, 13};
+// Output 1-4: ESP32 GPIO pins
+const int OUTPUT_PINS[] = {17, 16, 4, 15};
 
-const int NUM_INPUTS = NUM_GPIO_INPUTS + NUM_PCF_INPUTS;                    // Sum of input pins
-const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);       // Sum of output pins
-uint8_t lastInputStates[NUM_INPUTS] = {0};                                  // Array to store last input states
+const int NUM_INPUTS = NUM_PCF_INPUTS + NUM_GPIO_INPUTS;
+const int NUM_OUTPUTS = sizeof(OUTPUT_PINS) / sizeof(OUTPUT_PINS[0]);
+uint8_t lastInputStates[NUM_INPUTS] = {0}; // Array to store last input states
 
 //---------- Timing control ----------
 unsigned long lastMonitoringTime = 0;
 const long monitoringInterval = 200;
 unsigned long lastForceSendTime = 0;
-const unsigned long forceSendInterval = 60000;
+const unsigned long forceSendInterval = 20 * 60 * 1000; // 20 minutes
 
 //---------- Default login credentials for web UI ----------
-const char* default_username = "contoh";    // Username default
-const char* default_password = "password";  // Password default
-bool isAuthenticated = false;               // Authentication status
+const char* default_username = "contoh";  // Username default
+const char* default_password = "password"; // Password default
+bool isAuthenticated = false;       // Authentication status
 
 bool loadConfig() {
   File file = LittleFS.open("/config.json", "r");
   if (!file) {
-    Serial.println("No config file found, using defaults");
     return false;
   }
 
@@ -99,6 +102,7 @@ bool loadConfig() {
   config.commMode = doc["commMode"].as<String>();
   config.wifiSSID = doc["wifi"]["ssid"].as<String>();
   config.wifiPass = doc["wifi"]["password"].as<String>();
+  config.accessToken = doc["accessToken"].as<String>();
 
   Serial.println("Config loaded");
   return true;
@@ -112,6 +116,7 @@ bool saveConfig() {
   server["path"] = config.path;
   doc["monitoringPort"] = config.monitoringPort;
   doc["commMode"] = config.commMode;
+  doc["accessToken"] = config.accessToken;
   JsonObject wifi = doc.createNestedObject("wifi");
   wifi["ssid"] = config.wifiSSID;
   wifi["password"] = config.wifiPass;
@@ -141,6 +146,24 @@ String loadFile(const char* path) {
   return content;
 }
 
+//---------- Data Building and Sending Logic (REWRITTEN) ----------
+String buildStatusJSON() {
+  StaticJsonDocument<512> doc;
+  doc["type"] = "status";
+  doc["hardwareId"] = config.hardwareId;
+  doc["ip_address"] = WiFi.localIP().toString();
+  doc["mac_address"] = WiFi.macAddress();
+  doc["firmware_version"] = program_version;
+  doc["commMode"] = config.commMode;
+  doc["serverIP"] = config.serverIP;
+  doc["monitoringPort"] = config.monitoringPort;
+  doc["wifiSSID"] = config.wifiSSID;
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+  return jsonString;
+}
+
 //---------- data konfigurasi ----------
 String buildConfigJSON() {
   StaticJsonDocument<512> doc;
@@ -157,7 +180,6 @@ String buildConfigJSON() {
 
   JsonObject wifi = doc.createNestedObject("wifi");
   wifi["ssid"] = config.wifiSSID;
-  // Catatan: Password tidak dikirim untuk keamanan
 
   // Menambahkan data status perangkat yang berguna
   doc["ip_address"] = WiFi.localIP().toString();
@@ -175,39 +197,35 @@ void publishConfigMQTT() {
   String configTopic = "iot-node/" + config.hardwareId + "/status";
 
   if (mqttClient.publish(configTopic.c_str(), configData.c_str())) {
-    Serial.println("--- Configuration Sent via MQTT ---");
     Serial.println("Topic: " + configTopic);
     Serial.println("Payload: " + configData);
-    Serial.println("-----------------------------------");
   } else {
-    Serial.println("Failed to publish config to MQTT.");
+    Serial.println("Failed to publish MQTT.");
   }
 }
 
 //-------------- Callback pesan MQTT ---------------
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Pesan diterima di topik MQTT: ");
+  Serial.print("Pesan diterima MQTT: ");
   Serial.println(topic);
 }
 
 //-------------- Reconnect MQTT ---------------
 void reconnectMQTT() {
   while (!mqttClient.connected()) {
-    Serial.print("Mencoba terhubung ke MQTT Broker...");
-    Serial.printf(" | Free Heap: %d bytes\n", ESP.getFreeHeap());
-
+    Serial.print("Connecting to MQTT Broker...");
     String clientId = "iot-node-" + config.hardwareId + "-" + String(random(0, 1000));
-    if (mqttClient.connect(clientId.c_str())) {
-      Serial.println("Terhubung!");
-      // Kirim data config setiap kali berhasil terhubung
-      publishConfigMQTT();
-      // Subscribe ke topik command (opsional)
-      String commandTopic = "iot-node/" + config.hardwareId + "/command";
-      mqttClient.subscribe(commandTopic.c_str());
+    bool isThingsBoard = (config.serverIP == "mqtt.thingsboard.cloud");
+
+    // Use Access Token as username for ThingsBoard, otherwise connect anonymously.
+    const char* user = isThingsBoard ? config.accessToken.c_str() : NULL;
+
+    if (mqttClient.connect(clientId.c_str(), user, NULL)) {
+      Serial.println(" Connected!");
+      publishStatus(); // Send config on successful connection
     } else {
-      Serial.print("Gagal, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" Coba lagi dalam 5 detik");
+      Serial.print(" Failed, rc=" + String(mqttClient.state()));
+      Serial.println(". Retrying in 5 seconds.");
       delay(5000);
     }
   }
@@ -215,7 +233,7 @@ void reconnectMQTT() {
 
 //-------------- setup MQTT ---------------
 void setupMQTTClient() {
-  Serial.println("Communication Mode: MQTT (Standard TCP)");
+  Serial.println("Communication Mode: MQTT");
   mqttClient.setServer(config.serverIP.c_str(), config.monitoringPort);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(512);//ukuran buffer
@@ -265,15 +283,13 @@ void setupAP() {
   const char* apSSID_c = apSSID.c_str();
   WiFi.softAP(apSSID_c, ap_password);
   Serial.println("\nAP Mode: " + WiFi.softAPIP().toString());
-  Serial.println("Please connect to the Access Point and configure the device.");
-
   apStartTime = millis();  // Start timeout timer
 }
 
 void setupOTA() {
-  ArduinoOTA.setPort(3232);                        // Set port OTA
-  ArduinoOTA.setHostname(default_username);        // Set hostname
-  ArduinoOTA.setPassword(default_password);        // Set password OTA
+  ArduinoOTA.setPort(3232);                    // Set port OTA
+  ArduinoOTA.setHostname(default_username);      // Set hostname
+  ArduinoOTA.setPassword(default_password);      // Set password OTA
 
   // Callback when OTA starts
   ArduinoOTA.onStart([]() {
@@ -322,16 +338,24 @@ bool connectToWiFi() {
 
 //---------- Function to ensure WiFi is connected ----------
 void ensureWiFiConnected() {
+  static bool wasConnected = (WiFi.status() == WL_CONNECTED);
+
   if (WiFi.status() == WL_CONNECTED) {
+    if (!wasConnected) {
+      Serial.println("MONITOR:WIFI_RECONNECTED");
+      Serial.println("IP: " + WiFi.localIP().toString());
+      wasConnected = true;
+    }
     wifiReconnecting = false;
     return;
   }
-  if (!wifiReconnecting) {
-    Serial.println("WiFi disconnected. Starting reconnect...");
+  if (wasConnected) {
+    Serial.println("MONITOR:WIFI_DISCONNECTED");
+    wasConnected = false;
+    wifiReconnecting = true; // Langsung set true untuk memulai proses
+    wifiReconnectStart = millis();
     WiFi.disconnect();
     WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
-    wifiReconnectStart = millis();
-    wifiReconnecting = true;
   } else {
     if (millis() - wifiReconnectStart > 10000) {
       Serial.println("Reconnect timeout. Failed to connect.");
@@ -351,14 +375,15 @@ void ensureWiFiConnected() {
   }
 }
 
-//---------- Detect changes in input pins ----------
+//---------- Detect changes in input pins (UPDATED) ----------
 bool checkInputChanges() {
   bool changed = false;
 
-  // GPIO I1..I4
-  for (int i = 0; i < NUM_GPIO_INPUTS; i++)
+  // PCF I1..I8
+  for (int i = 0; i < NUM_PCF_INPUTS; i++)
   {
-    uint8_t current = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
+    uint8_t pin = PCF_PIN_MAP[i];
+    uint8_t current = pcf8574.read(pin) ? 1 : 0;
     if (current != lastInputStates[i])
     {
       lastInputStates[i] = current;
@@ -366,12 +391,11 @@ bool checkInputChanges() {
     }
   }
 
-  // PCF I5..I12 (urutan 4,5,6,7,0,1,2,3)
-  for (int j = 0; j < NUM_PCF_INPUTS; j++)
+  // GPIO I9..I16
+  for (int j = 0; j < NUM_GPIO_INPUTS; j++)
   {
-    uint8_t pin = PCF_PIN_MAP[j];
-    uint8_t current = pcf8574.read(pin) ? 1 : 0;
-    int idx = NUM_GPIO_INPUTS + j; // 4..11
+    uint8_t current = digitalRead(INPUT_GPIO_PINS[j]) ? 1 : 0;
+    int idx = NUM_PCF_INPUTS + j; // 8..15
     if (current != lastInputStates[idx])
     {
       lastInputStates[idx] = current;
@@ -381,56 +405,53 @@ bool checkInputChanges() {
   return changed;
 }
 
-//---------- Function to bulit monitoring data  ----------
-String buildMonitoringJSON(bool addTimestamp = false, bool defaultMode = false) {
+
+//---------- Function to bulit monitoring data (UPDATED) ----------
+String buildMonitoringJSON(bool forThingsBoard = false) {
   StaticJsonDocument<512> doc;
 
-  doc["box_id"] = config.hardwareId;
-
-  if (defaultMode) {
-    // Semua input = 0
-    for (int i = 0; i < NUM_INPUTS; i++) {
-      String key = "I" + String(i + 1);
-      doc[key] = 0;
-    }
-    // Semua output = 0
-    for (int i = 0; i < NUM_OUTPUTS; i++) {
-      String key = "Q" + String(i + 1);
-      doc[key] = 0;
-    }
-    // Current = 0
-    doc["I"] = "0.00";
-  } else {
-    // I1..I4 dari GPIO
-    for (int i = 0; i < NUM_GPIO_INPUTS; i++) {
-      String key = "I" + String(i + 1);
-      int rawVal = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
-      doc[key] = rawVal;
-    }
-
-    // I5..I12 dari PCF8574
-    for (int j = 0; j < NUM_PCF_INPUTS; j++) {
-      String key = "I" + String(NUM_GPIO_INPUTS + j + 1);
-      uint8_t pin = PCF_PIN_MAP[j];
-      int rawVal = pcf8574.read(pin) ? 1 : 0;
-      doc[key] = rawVal;
-    }
-
-    // Status output
-    for (int i = 0; i < NUM_OUTPUTS; i++) {
-      String key = "Q" + String(i + 1);
-      doc[key] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
-    }
+  if (!forThingsBoard) {
+    doc["type"] = "telemetry";
+    doc["box_id"] = config.hardwareId;
   }
 
-  // Timestamp
-  if (addTimestamp) {
-    doc["timestamp"] = getTimestamp();
+  for (int i = 0; i < NUM_PCF_INPUTS; i++) {
+    doc["I" + String(i + 1)] = pcf8574.read(PCF_PIN_MAP[i]) ? 1 : 0;
+  }
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++) {
+    doc["I" + String(NUM_PCF_INPUTS + i + 1)] = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
+  }
+  for (int i = 0; i < NUM_OUTPUTS; i++) {
+    doc["Q" + String(i + 1)] = digitalRead(OUTPUT_PINS[i]) ? 1 : 0;
   }
 
   String jsonString;
   serializeJson(doc, jsonString);
   return jsonString;
+}
+
+void publishStatus() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  String statusData = buildStatusJSON();
+
+  if (config.commMode == "mqtt" && mqttClient.connected()) {
+    String topic = "iot-node/" + config.hardwareId + "/status";
+    mqttClient.publish(topic.c_str(), statusData.c_str());
+    Serial.println("Published Status to MQTT: " + topic);
+  } else if (config.commMode == "ws" && webSocket.isConnected()) {
+    webSocket.sendTXT(statusData);
+    Serial.println("Sent Status via WebSocket");
+  } else if (config.commMode == "httppost") {
+    HTTPClient http;
+    String url = "http://" + config.serverIP + ":" + String(config.monitoringPort) + config.path;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.POST(statusData);
+    http.end();
+    Serial.println("Sent Status via HTTP POST");
+  }
+  Serial.println("Payload: " + statusData);
 }
 
 String getTimestamp() {
@@ -447,41 +468,36 @@ String getTimestamp() {
 
 //---------- Function send monitoring data  ----------
 void sendMonitoringData() {
-  bool isWiFi = (WiFi.status() == WL_CONNECTED);
-  bool isWS = (config.commMode == "ws" && webSocket.isConnected());
-  bool isHTTP = (config.commMode == "httppost");
-  bool isMQTT = (config.commMode == "mqtt");
-
-  // Data JSON normal
-  String data = buildMonitoringJSON();
-
-  // === ONLINE ===
-  if (isWiFi && (isWS || isHTTP || isMQTT)) {
-    if (isWS) {
-      // Send via WebSocket
-      webSocket.sendTXT(data);
-      Serial.println("Sending via WebSocket: " + data);
-    } else if (isHTTP) {
-      // Send via HTTP POST
-      HTTPClient http;
-      String url = "http://" + config.serverIP + ":" + String(config.monitoringPort) + config.path;
-      http.begin(url);
-      http.addHeader("Content-Type", "application/json");
-
-      int httpResponseCode = http.POST(data);
-      if (httpResponseCode > 0) {
-        Serial.printf("HTTP POST Success [%d]\n", httpResponseCode);
-      } else {
-        Serial.printf("HTTP POST Error: %s\n", http.errorToString(httpResponseCode).c_str());
-      }
-      http.end();
-    }
-    else if (isMQTT) {
-      Serial.println("Sending via MQTT (not implemented yet): " + data);
-    }
+  if (WiFi.status() != WL_CONNECTED) {
+    return; // Add buffering logic here if needed
   }
-  // === OFFLINE ===
-  else {
+
+  bool isThingsBoard = (config.serverIP == "mqtt.thingsboard.cloud");
+  String data = buildMonitoringJSON(isThingsBoard);
+
+  if (config.commMode == "mqtt" && mqttClient.connected()) {
+    String topic = isThingsBoard ? "v1/devices/me/telemetry" : "iot-node/" + config.hardwareId + "/telemetry";
+    if (mqttClient.publish(topic.c_str(), data.c_str())) {
+      Serial.println("Data sent to MQTT topic: " + topic);
+    } else {
+      Serial.println("Failed to publish MQTT.");
+    }
+  } else if (config.commMode == "ws" && webSocket.isConnected()) {
+    webSocket.sendTXT(data);
+    Serial.println("Sending via WebSocket");
+  } else if (config.commMode == "httppost") {
+    HTTPClient http;
+    String url = "http://" + config.serverIP + ":" + String(config.monitoringPort) + config.path;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int httpResponseCode = http.POST(data);
+    if (httpResponseCode > 0) {
+      Serial.printf("HTTP POST Success [%d]\n", httpResponseCode);
+    } else {
+      Serial.printf("HTTP POST Error: %s\n", http.errorToString(httpResponseCode).c_str());
+    }
+    http.end();
+  } else {
     String newData = buildMonitoringJSON(true);
     if (monitoringBuffer.size() >= MAX_BUFFER_SIZE) {
       monitoringBuffer.erase(monitoringBuffer.begin());
@@ -489,7 +505,9 @@ void sendMonitoringData() {
     monitoringBuffer.push_back(newData);
     Serial.println("Buffered (offline): " + newData);
   }
+  Serial.println("Payload: " + data);
 }
+
 
 //---------- Function to handle event WebSocket ----------
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
@@ -499,29 +517,9 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       readytoSend = false;
       break;
     case WStype_CONNECTED:
-      Serial.println("Connect to websocket!");
-
-      // Send initial JSON with box_id
-      {
-        StaticJsonDocument<100> doc;
-        doc["box_id"] = config.hardwareId;
-        String jsonString;
-        serializeJson(doc, jsonString);
-        webSocket.sendTXT(jsonString);
-        Serial.println("Sent initial JSON: " + jsonString);
-        delay(200);
-      }
-
-      // Send buffered data if any
-      if (monitoringBuffer.size() > 0) {
-        Serial.println("Reconnected: Sending buffered data...");
-        for (String& bufferedData : monitoringBuffer) {
-          webSocket.sendTXT(bufferedData);
-          delay(200);
-        }
-        monitoringBuffer.clear();
-      }
+      Serial.println("WebSocket Connected!");
       readytoSend = true;
+      publishStatus(); // Send config on successful connection
       break;
     case WStype_TEXT: {
         String data = String((char*)payload);
@@ -555,8 +553,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
             serializeJson(resp, jsonOut);
 
             webSocket.sendTXT(jsonOut);
-            Serial.println("Send config JSON:");
-            Serial.println(jsonOut);
+            Serial.println("Send config JSON:" + jsonOut);
             return;
           }
 
@@ -663,6 +660,7 @@ void handleRoot() {
     html.replace("%PATH%", config.path);
     html.replace("%WIFI_SSID%", config.wifiSSID);
     html.replace("%WIFI_PASS%", config.wifiPass);
+    html.replace("%ACCESS_TOKEN%", config.accessToken);
     server.send(200, "text/html", html.c_str());
   }
 }
@@ -698,20 +696,24 @@ void handleSaveConfig() {
   // Take configuration data from form
   String newHardwareId = server.arg("hardwareId");
   String newServerIP = server.arg("serverIP");
+  int newMonitoringPort = server.arg("serverPort").toInt();
   String newPath = server.arg("path");
   String newcommMode = server.arg("commMode");
   String newSSID = server.arg("ssid");
   String newPassword = server.arg("password");
+  String newAccessToken = server.arg("accessToken");
 
   // Validate input data
   if (newHardwareId.length() > 0 && newServerIP.length() > 0 && newSSID.length() > 0 && newPassword.length() > 0) {
 
     config.hardwareId = newHardwareId;
     config.serverIP = newServerIP;
+    config.monitoringPort = newMonitoringPort;
     config.path = newPath;
     config.commMode = newcommMode;
     config.wifiSSID = newSSID;
     config.wifiPass = newPassword;
+    config.accessToken = newAccessToken;
     saveConfig();
 
     // Show success page
@@ -764,19 +766,19 @@ void handleSerialInput() {
         return;
       } else if (inputString.equalsIgnoreCase("help")) {
         Serial.println("==> Available commands:");
-        Serial.println("  help           - Show this help message");
-        Serial.println("  config         - Show current configuration");
-        Serial.println("  restartesp     - Restart the ESP32");
-        Serial.println("  <JSON>         - Send new configuration in JSON format");
+        Serial.println("  help          - Show this help message");
+        Serial.println("  config        - Show current configuration");
+        Serial.println("  restartesp    - Restart the ESP32");
+        Serial.println("  <JSON>        - Send new configuration in JSON format");
         Serial.println("");
         Serial.println("==> JSON format example:");
         Serial.println("{");
         Serial.println("  \"server_ip\": \"192.168.1.100\",  // Server IP address");
-        Serial.println("  \"path\": \"/ws\",                 // Path Server");
-        Serial.println("  \"port\": 80,                      // Port number for monitoring");
+        Serial.println("  \"path\": \"/ws\",             // Path Server");
+        Serial.println("  \"port\": 80,                  // Port number for monitoring");
         Serial.println("  \"box_id\": \"001\",               // Unique hardware identifier");
-        Serial.println("  \"commMode\": \"ws\",              // Static IP address for ESP32");
-        Serial.println("  \"ssid\": \"YourWiFiSSID\",        // WiFi SSID");
+        Serial.println("  \"commMode\": \"ws\",            // Static IP address for ESP32");
+        Serial.println("  \"ssid\": \"YourWiFiSSID\",      // WiFi SSID");
         Serial.println("  \"pass\": \"YourWiFiPassword\"     // WiFi Password");
         Serial.println("}");
         inputString = "";
@@ -842,7 +844,7 @@ void handleSaveRules() {
   }
 }
 
-// Inisialisasi GPIO lokal & PCF8574
+// Inisialisasi GPIO lokal & PCF8574 (UPDATED)
 void setupIO() {
   if (!pcf8574.begin()) Serial.println("PCF8574: Failed begin()");
   if (!pcf8574.isConnected()) Serial.println("PCF8574: not connected!");
@@ -850,20 +852,22 @@ void setupIO() {
 
   pcf8574.write8(0xFF); // default HIGH
 
-  for (int i = 0; i < NUM_GPIO_INPUTS; i++) pinMode(INPUT_GPIO_PINS[i], INPUT);
+  for (int i = 0; i < NUM_GPIO_INPUTS; i++) pinMode(INPUT_GPIO_PINS[i], INPUT_PULLUP);
   for (int i = 0; i < NUM_OUTPUTS; i++) {
     pinMode(OUTPUT_PINS[i], OUTPUT);
     digitalWrite(OUTPUT_PINS[i], LOW);
   }
 
   // Simpan state awal
-  for (int i = 0; i < NUM_GPIO_INPUTS; i++) {
-    lastInputStates[i] = digitalRead(INPUT_GPIO_PINS[i]) ? 1 : 0;
-  }
+  // PCF (I1-I8)
   uint8_t s = pcf8574.read8();
-  for (int j = 0; j < NUM_PCF_INPUTS; j++) {
-    uint8_t pin = PCF_PIN_MAP[j];
-    lastInputStates[NUM_GPIO_INPUTS + j] = (s >> pin) & 0x01;
+  for (int i = 0; i < NUM_PCF_INPUTS; i++) {
+    uint8_t pin = PCF_PIN_MAP[i];
+    lastInputStates[i] = (s >> pin) & 0x01;
+  }
+  // GPIO (I9-I16)
+  for (int j = 0; j < NUM_GPIO_INPUTS; j++) {
+    lastInputStates[NUM_PCF_INPUTS + j] = digitalRead(INPUT_GPIO_PINS[j]) ? 1 : 0;
   }
 }
 
@@ -874,7 +878,6 @@ void setupWiFiMode() {
     isAPMode = false;
     setupOTA();
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Serial.println("Time synchronized from NTP.");
   } else {
     setupAP();
   }
@@ -886,6 +889,7 @@ void setupCommMode() {
     if (config.commMode == "ws") setupWebSocket();
     else if (config.commMode == "httppost") setupHttppost();
     else if (config.commMode == "mqtt") setupMQTTClient(); // Diaktifkan
+    readytoSend = true;
   }
 }
 
@@ -950,10 +954,6 @@ void setup() {
 
 //---------- Main loop function  ----------
 void loop() {
-  ArduinoOTA.handle();
-  server.handleClient();
-  handleSerialInput();
-
   if (!isAPMode) {
     ensureWiFiConnected();
     if (config.commMode == "ws") webSocket.loop();
@@ -963,16 +963,20 @@ void loop() {
       }
       mqttClient.loop();
     }
+    if (millis() - lastMonitoringTime >= monitoringInterval) {
+      bool hasChanged = checkInputChanges();
+      bool forceSend = (millis() - lastForceSendTime >= forceSendInterval);
 
-    bool intervalPassed = millis() - lastMonitoringTime >= monitoringInterval;
-    bool forceSendDue = millis() - lastForceSendTime >= forceSendInterval;
-
-    if (config.commMode != "mqtt" && intervalPassed && (checkInputChanges() || (forceSendDue && readytoSend))) {
-      sendMonitoringData();
+      if (hasChanged || forceSend) {
+        sendMonitoringData();
+        lastForceSendTime = millis();
+      }
       lastMonitoringTime = millis();
-      if (forceSendDue) lastForceSendTime = millis();
     }
+    if (WiFi.status() == WL_CONNECTED) ArduinoOTA.handle();
   } else {
     handleAPModeTimeout();
   }
+  server.handleClient();
+  handleSerialInput();
 }

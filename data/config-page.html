@@ -94,13 +94,11 @@
   </style>
 </head>
 <body>
-  <!-- Navigation -->
   <div class="navbar">
     <button id="tabConfig" class="active" onclick="showTab('config')">Configuration</button>
     <button id="tabControl" onclick="showTab('control')">Control</button>
   </div>
 
-  <!-- Config Tab -->
   <div id="config" class="tab-content active">
     <div class="config-container">
       <h1>Device Configuration</h1>
@@ -113,23 +111,27 @@
           <label for="serverIP">Server IP</label>
           <input type="text" id="serverIP" name="serverIP" value="%SERVER_IP%" required>
         </div>
-        
         <div class="form-group">
           <label for="serverPort">Port</label>
-          <input type="number" id="serverPort" name="serverPort" value="%SERVER_PORT%" placeholder="e.g., 8080" required>
+          <input type="number" id="serverPort" name="serverPort" value="%SERVER_PORT%" placeholder="%SERVER_PORT%" required>
         </div>
         <div class="form-group">
           <label for="path">Path Server</label>
-          <input type="text" id="path" name="path" value="%PATH%" required>
-        </div>
+          <input type="text" id="path" name="path" value="%PATH%"> </div>
         <div class="form-group">
           <label for="commMode">Communication Mode</label>
-          <select id="commMode" name="commMode" required>
+          <select id="commMode" name="commMode" required onchange="toggleAccessTokenField()">
             <option value="ws" %COMM_WS%>WebSocket</option>
             <option value="httppost" %COMM_HTTP%>HTTP POST</option>
             <option value="mqtt" %COMM_MQTT%>MQTT</option>
           </select>
         </div>
+
+        <div class="form-group" id="accessTokenGroup" style="display: none;">
+          <label for="accessToken">MQTT Access Token</label>
+          <input type="text" id="accessToken" name="accessToken" value="%ACCESS_TOKEN%">
+        </div>
+
         <div class="form-group">
           <label for="ssid">SSID</label>
           <input type="text" id="ssid" name="ssid" value="%WIFI_SSID%" required>
@@ -148,21 +150,8 @@
     </div>
   </div>
 
-  <!-- Control Tab -->
   <div id="control" class="tab-content">
-    <div class="config-container">
-      <h1>Output Control</h1>
-      <div class="output-grid">
-        <button class="output-btn off" onclick="toggleOutput(0, this)">O1</button>
-        <button class="output-btn off" onclick="toggleOutput(1, this)">O2</button>
-        <button class="output-btn off" onclick="toggleOutput(2, this)">O3</button>
-        <button class="output-btn off" onclick="toggleOutput(3, this)">O4</button>
-      </div>
-      <div class="config-container">
-      <h1>Automation Rules</h1>
-        <div id="ruleList"></div>
-        <button onclick="addRuleForm()">+ Add Rule</button>
-    </div>
+    <div class="config-container"> <h1>Output Control</h1> <div class="output-grid"> <button class="output-btn off" onclick="toggleOutput(0, this)">O1</button> <button class="output-btn off" onclick="toggleOutput(1, this)">O2</button> <button class="output-btn off" onclick="toggleOutput(2, this)">O3</button> <button class="output-btn off" onclick="toggleOutput(3, this)">O4</button> </div> </div> <div class="config-container" style="margin-top:20px;"> <h1>Automation Rules</h1> <div id="ruleList"></div> <button onclick="addRuleForm()">+ Add Rule</button> </div>
   </div>
 
   <script>
@@ -184,6 +173,22 @@
           el.classList.toggle("off", newState==="off");
         });
     }
+
+    // === FUNGSI BARU UNTUK MENAMPILKAN/MENYEMBUNYIKAN KOLOM TOKEN ===
+    function toggleAccessTokenField() {
+      const commModeSelect = document.getElementById('commMode');
+      const accessTokenGroup = document.getElementById('accessTokenGroup');
+      if (commModeSelect.value === 'mqtt') {
+        accessTokenGroup.style.display = 'block'; // Tampilkan jika MQTT
+      } else {
+        accessTokenGroup.style.display = 'none';  // Sembunyikan jika bukan MQTT
+      }
+    }
+
+    // Panggil fungsi saat halaman selesai dimuat
+    document.addEventListener('DOMContentLoaded', function() {
+        toggleAccessTokenField();
+    });
   </script>
 </body>
 </html>

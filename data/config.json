@@ -1,14 +1,15 @@
 {
   "hardwareId": "001",
   "server": {
-    "serverIP": "iotnodeserver.duckdns.org",
+    "serverIP": "mqtt.thingsboard.cloud",
     "path": "/wsiot"
   },
-  "monitoringPort": 80,
-  "commMode": "ws",
+  "monitoringPort": 1883,
+  "commMode": "mqtt",
+  "accessToken": "WFbTLIYLlBhJNopKmGJl",
   "wifi": {
-    "ssid": "Stechoq Robotika Indonesia",
-    "password": "Stechoq2024"
+    "ssid": "Alaadiyaat",
+    "password": "alaadiyaat25"
   },
   "rules": []
 }

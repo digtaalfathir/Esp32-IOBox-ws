@@ -10,7 +10,7 @@ console.log(`WebSocket server running on ws://localhost:${PORT}`);
 let clients = [];
 
 // ID ESP target
-const TARGET_BOX_ID = "002";
+const TARGET_BOX_ID = "001";
 
 wss.on("connection", function connection(ws, req) {
   const clientIP = req.socket.remoteAddress;
@@ -50,8 +50,8 @@ function sendCommand(boxId, payload) {
 // }, 15000);
 
 // === Contoh 2: kirim update config (ubah port, ip, wifi) ===
-setTimeout(() => {
-  sendCommand(TARGET_BOX_ID, {
-    port: 1883,
-  });
-}, 5000); // kirim 5 detik setelah konek
+// setTimeout(() => {
+//   sendCommand(TARGET_BOX_ID, {
+//     port: 1883,
+//   });
+// }, 5000); // kirim 5 detik setelah konek
