@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Control - IoT Node</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+    
+    .header {
+      background: white;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      padding: 1rem 0;
+    }
+    
+    .header-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .btn-back {
+      padding: 10px 20px;
+      background: #64748b;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f1f5f9;
+    }
+    
+    .card-icon {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 30px;
+    }
+    
+    h2 {
+      font-size: 24px;
+      color: #1e293b;
+    }
+    
+    .subtitle {
+      font-size: 14px;
+      color: #64748b;
+    }
+    
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1.5rem;
+    }
+    
+    .output-card {
+      background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+      border: 3px solid #cbd5e1;
+      border-radius: 16px;
+      padding: 30px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .output-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      transition: left 0.5s;
+    }
+    
+    .output-card:hover::before {
+      left: 100%;
+    }
+    
+    .output-card:hover {
+      transform: translateY(-8px) scale(1.02);
+      box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+    }
+    
+    .output-card.on {
+      background: linear-gradient(135deg, #10b981, #059669);
+      border-color: #059669;
+      color: white;
+    }
+    
+    .output-card.off {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      border-color: #dc2626;
+      color: white;
+    }
+    
+    .output-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+      display: block;
+    }
+    
+    .output-label {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .output-status {
+      font-size: 13px;
+      opacity: 0.9;
+      font-weight: 600;
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 20px;
+      display: inline-block;
+      margin-top: 5px;
+    }
+    
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: white;
+      padding: 16px 20px;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      display: none;
+      align-items: center;
+      gap: 12px;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+    }
+    
+    @keyframes slideIn {
+      from { transform: translateX(400px); }
+      to { transform: translateX(0); }
+    }
+    
+    .toast.show { display: flex; }
+    
+    .toast-icon { font-size: 24px; }
+    
+    .toast-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+    
+    @media (max-width: 768px) {
+      .output-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-content">
+      <h1 style="font-size: 20px; color: #1e293b;">🎛️ Output Control</h1>
+      <a href="/dashboard" class="btn-back">← Back to Dashboard</a>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-icon">💡</div>
+        <div>
+          <h2>Digital Outputs</h2>
+          <p class="subtitle">Click to toggle outputs ON/OFF</p>
+        </div>
+      </div>
+      
+      <div class="output-grid">
+        <div class="output-card off" onclick="toggle(0, this)">
+          <span class="output-icon">💡</span>
+          <div class="output-label">Output 1</div>
+          <div class="output-status">OFF</div>
+        </div>
+        
+        <div class="output-card off" onclick="toggle(1, this)">
+          <span class="output-icon">💡</span>
+          <div class="output-label">Output 2</div>
+          <div class="output-status">OFF</div>
+        </div>
+        
+        <div class="output-card off" onclick="toggle(2, this)">
+          <span class="output-icon">💡</span>
+          <div class="output-label">Output 3</div>
+          <div class="output-status">OFF</div>
+        </div>
+        
+        <div class="output-card off" onclick="toggle(3, this)">
+          <span class="output-icon">💡</span>
+          <div class="output-label">Output 4</div>
+          <div class="output-status">OFF</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div id="toast" class="toast">
+    <div class="toast-icon">✓</div>
+    <div class="toast-text">Output updated successfully</div>
+  </div>
+  
+  <script>
+    async function toggle(pin, el) {
+      const isOn = el.classList.contains('on');
+      const newState = isOn ? 'off' : 'on';
+      
+      try {
+        const res = await fetch(`/toggle?pin=${pin}&state=${newState}`, {method: 'POST'});
+        
+        if (res.ok) {
+          if (newState === 'on') {
+            el.classList.remove('off');
+            el.classList.add('on');
+            el.querySelector('.output-status').textContent = 'ON';
+          } else {
+            el.classList.remove('on');
+            el.classList.add('off');
+            el.querySelector('.output-status').textContent = 'OFF';
+          }
+          
+          showToast(`Output ${pin + 1} is now ${newState.toUpperCase()}`);
+        }
+      } catch (err) {
+        alert('Failed to toggle output');
+      }
+    }
+    
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.querySelector('.toast-text').textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+    
+    async function loadStates() {
+      try {
+        const res = await fetch('/get-outputs');
+        const data = await res.json();
+        const cards = document.querySelectorAll('.output-card');
+        
+        cards.forEach((card, i) => {
+          if (data.outputs[i] === 1) {
+            card.classList.remove('off');
+            card.classList.add('on');
+            card.querySelector('.output-status').textContent = 'ON';
+          } else {
+            card.classList.remove('on');
+            card.classList.add('off');
+            card.querySelector('.output-status').textContent = 'OFF';
+          }
+        });
+      } catch (err) {
+        console.error('Failed to load states');
+      }
+    }
+    
+    loadStates();
+  </script>
+</body>
+</html>

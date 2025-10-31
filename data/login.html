@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IoT Node - Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    
+    .login-container {
+      background: white;
+      padding: 40px;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      width: 100%;
+      max-width: 420px;
+      animation: slideUp 0.5s ease;
+    }
+    
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .logo {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .logo-icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+      margin-bottom: 15px;
+    }
+    
+    h1 {
+      color: #1e293b;
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      color: #64748b;
+      font-size: 14px;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    label {
+      display: block;
+      color: #334155;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    
+    .input-wrapper {
+      position: relative;
+    }
+    
+    .input-icon {
+      position: absolute;
+      left: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      opacity: 0.5;
+    }
+    
+    input {
+      width: 100%;
+      padding: 14px 15px 14px 45px;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      font-size: 15px;
+      font-family: inherit;
+      transition: all 0.3s;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+    }
+    
+    .password-toggle {
+      position: absolute;
+      right: 15px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      opacity: 0.5;
+      transition: opacity 0.3s;
+    }
+    
+    .password-toggle:hover { opacity: 0.8; }
+    
+    .btn-login {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.3s, box-shadow 0.3s;
+      margin-top: 10px;
+    }
+    
+    .btn-login:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-login:active { transform: translateY(0); }
+    
+    .alert {
+      padding: 12px 15px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      display: none;
+      animation: shake 0.5s;
+    }
+    
+    .alert.error {
+      background: #fee2e2;
+      color: #991b1b;
+      border-left: 4px solid #ef4444;
+    }
+    
+    .alert.show { display: block; }
+    
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-10px); }
+      75% { transform: translateX(10px); }
+    }
+    
+    .footer {
+      text-align: center;
+      margin-top: 25px;
+      color: #64748b;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <h1>IoT Node</h1>
+      <p class="subtitle">Device Management System</p>
+    </div>
+    
+    <div id="alert" class="alert error">
+      <strong>⚠️ Login Failed</strong><br>
+      Invalid username or password
+    </div>
+    
+    <form action="/auth" method="POST" onsubmit="return validateForm()">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <div class="input-wrapper">
+          <span class="input-icon">👤</span>
+          <input type="text" id="username" name="username" required autofocus>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label for="password">Password</label>
+        <div class="input-wrapper">
+          <span class="input-icon">🔒</span>
+          <input type="password" id="password" name="password" required>
+          <button type="button" class="password-toggle" onclick="togglePassword()">👁️</button>
+        </div>
+      </div>
+      
+      <button type="submit" class="btn-login">
+        🚀 Login to Dashboard
+      </button>
+    </form>
+    
+    <div class="footer">
+      Firmware v2.8.0 | Powered by ESP32
+    </div>
+  </div>
+  
+  <script>
+    function togglePassword() {
+      const input = document.getElementById('password');
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
+    
+    function validateForm() {
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      
+      if (!username || !password) {
+        showAlert();
+        return false;
+      }
+      return true;
+    }
+    
+    function showAlert() {
+      const alert = document.getElementById('alert');
+      alert.classList.add('show');
+      setTimeout(() => alert.classList.remove('show'), 3000);
+    }
+    
+    // Show alert if login failed (URL parameter)
+    if (window.location.search.includes('error=1')) {
+      showAlert();
+    }
+  </script>
+</body>
+</html>

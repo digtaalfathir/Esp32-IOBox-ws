@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Configuration - IoT Node</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+    
+    .header {
+      background: white;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      padding: 1rem 0;
+    }
+    
+    .header-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .btn-back {
+      padding: 10px 20px;
+      background: #64748b;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      margin-bottom: 1.5rem;
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 25px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid #f1f5f9;
+    }
+    
+    .card-icon {
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+    
+    h2 {
+      font-size: 20px;
+      color: #1e293b;
+    }
+    
+    .subtitle {
+      font-size: 13px;
+      color: #64748b;
+    }
+    
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+    }
+    
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    
+    .form-group.full-width {
+      grid-column: 1 / -1;
+    }
+    
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 8px;
+    }
+    
+    .required { color: #ef4444; }
+    
+    .input-wrapper {
+      position: relative;
+    }
+    
+    .input-icon {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      opacity: 0.5;
+    }
+    
+    input, select {
+      width: 100%;
+      padding: 12px 14px 12px 42px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 15px;
+      font-family: inherit;
+      transition: all 0.3s;
+    }
+    
+    input:focus, select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+    }
+    
+    .hint {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 6px;
+    }
+    
+    .password-toggle {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      opacity: 0.5;
+    }
+    
+    .btn-group {
+      display: flex;
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    
+    .btn {
+      flex: 1;
+      padding: 14px 20px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #334155;
+    }
+    
+    .info-box {
+      background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+      border-left: 4px solid #3b82f6;
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      color: #1e40af;
+    }
+    
+    @media (max-width: 768px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .btn-group { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-content">
+      <h1 style="font-size: 20px; color: #1e293b;">⚙️ Device Configuration</h1>
+      <a href="/dashboard" class="btn-back">← Back to Dashboard</a>
+    </div>
+  </div>
+  
+  <div class="container">
+    <form action="/save-config" method="POST">
+      <!-- Device Settings -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">🔧</div>
+          <div>
+            <h2>Device Settings</h2>
+            <p class="subtitle">Configure device identity and network mode</p>
+          </div>
+        </div>
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Hardware ID <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔖</span>
+              <input type="text" name="hardwareId" value="%HARDWARE_ID%" required>
+            </div>
+            <p class="hint">Unique identifier for this device</p>
+          </div>
+          
+          <div class="form-group">
+            <label>Network Mode <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">🌐</span>
+              <select name="networkMode" required>
+                <option value="WiFi" %NETWORK_WIFI%>WiFi Only</option>
+                <option value="Ethernet" %NETWORK_ETH%>Ethernet Only</option>
+                <option value="Hybrid" %NETWORK_HYBRID%>Hybrid (Auto Switch)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Server Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">🖥️</div>
+          <div>
+            <h2>Server Configuration</h2>
+            <p class="subtitle">Configure connection to monitoring server</p>
+          </div>
+        </div>
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Server IP <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">🌐</span>
+              <input type="text" name="serverIP" value="%SERVER_IP%" placeholder="192.168.1.100" required>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>Port <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔌</span>
+              <input type="number" name="serverPort" value="%SERVER_PORT%" placeholder="80" required>
+            </div>
+          </div>
+          
+          <div class="form-group full-width">
+            <label>Server Path</label>
+            <div class="input-wrapper">
+              <span class="input-icon">📁</span>
+              <input type="text" name="path" value="%PATH%" placeholder="/wsiot">
+            </div>
+            <p class="hint">Example: /ws, /api/data, /wsiot</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Communication Protocol -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">📡</div>
+          <div>
+            <h2>Communication Protocol</h2>
+            <p class="subtitle">Select communication method</p>
+          </div>
+        </div>
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Mode <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">📡</span>
+              <select name="commMode" id="commMode" onchange="toggleMQTT()" required>
+                <option value="ws" %COMM_WS%>WebSocket</option>
+                <option value="httppost" %COMM_HTTP%>HTTP POST</option>
+                <option value="mqtt" %COMM_MQTT%>MQTT</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="form-group" id="mqttToken" style="display: none;">
+            <label>MQTT Access Token</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔑</span>
+              <input type="text" name="accessToken" value="%ACCESS_TOKEN%">
+            </div>
+            <p class="hint">Required for ThingsBoard</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- WiFi Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">📶</div>
+          <div>
+            <h2>WiFi Configuration</h2>
+            <p class="subtitle">Configure wireless connection</p>
+          </div>
+        </div>
+        
+        <div class="info-box">
+          💡 <strong>Tip:</strong> Required for WiFi and Hybrid modes
+        </div>
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label>SSID <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">📶</span>
+              <input type="text" name="ssid" value="%WIFI_SSID%" required>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>Password <span class="required">*</span></label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔒</span>
+              <input type="password" id="wifiPass" name="password" value="%WIFI_PASS%" required>
+              <button type="button" class="password-toggle" onclick="togglePass()">👁️</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Buttons -->
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary">💾 Save Configuration</button>
+        <button type="button" class="btn btn-secondary" onclick="window.location.href='/dashboard'">❌ Cancel</button>
+      </div>
+    </form>
+  </div>
+  
+  <script>
+    function toggleMQTT() {
+      const mode = document.getElementById('commMode').value;
+      const token = document.getElementById('mqttToken');
+      token.style.display = mode === 'mqtt' ? 'block' : 'none';
+    }
+    
+    function togglePass() {
+      const input = document.getElementById('wifiPass');
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
+    
+    toggleMQTT();
+  </script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dashboard - IoT Node</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    
+    .header {
+      background: white;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .header-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .logo-icon {
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+    
+    .logo-text h1 {
+      font-size: 20px;
+      color: #1e293b;
+    }
+    
+    .logo-text p {
+      font-size: 12px;
+      color: #64748b;
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      background: #d1fae5;
+      color: #065f46;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .btn-logout {
+      padding: 10px 20px;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-logout:hover {
+      background: #dc2626;
+      transform: translateY(-2px);
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+    
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      transition: all 0.3s;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    
+    .card:hover {
+      transform: translateY(-10px);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+    }
+    
+    .card-icon {
+      width: 70px;
+      height: 70px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      margin-bottom: 20px;
+    }
+    
+    .card h2 {
+      font-size: 22px;
+      color: #1e293b;
+      margin-bottom: 10px;
+    }
+    
+    .card p {
+      color: #64748b;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    
+    .quick-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    
+    .stat-card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .stat-label {
+      font-size: 13px;
+      color: #64748b;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    
+    @media (max-width: 768px) {
+      .header-content { flex-direction: column; gap: 1rem; }
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-content">
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        <div class="logo-text">
+          <h1>IoT Node Dashboard</h1>
+          <p>Hardware ID: <strong>%HARDWARE_ID%</strong></p>
+        </div>
+      </div>
+      <div style="display: flex; gap: 1rem; align-items: center;">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          Online
+        </div>
+        <button class="btn-logout" onclick="logout()">
+          🚪 Logout
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="quick-stats">
+      <div class="stat-card">
+        <div class="stat-label">NETWORK MODE</div>
+        <div class="stat-value">%NETWORK_MODE%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">COMMUNICATION</div>
+        <div class="stat-value">%COMM_MODE%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">SERVER</div>
+        <div class="stat-value" style="font-size: 16px;">%SERVER_IP%:%SERVER_PORT%</div>
+      </div>
+    </div>
+    
+    <div class="dashboard-grid">
+      <a href="/config" class="card">
+        <div class="card-icon">⚙️</div>
+        <h2>Configuration</h2>
+        <p>Configure device settings, network, server connection, and communication protocols</p>
+      </a>
+      
+      <a href="/control" class="card">
+        <div class="card-icon">🎛️</div>
+        <h2>Output Control</h2>
+        <p>Control digital outputs remotely and monitor their current states in real-time</p>
+      </a>
+      
+      <a href="/status" class="card">
+        <div class="card-icon">📊</div>
+        <h2>System Status</h2>
+        <p>View device information, connection status, and system health monitoring</p>
+      </a>
+      
+      <a href="/download-config" class="card">
+        <div class="card-icon">📥</div>
+        <h2>Backup Config</h2>
+        <p>Download current configuration as JSON file for backup or restore purposes</p>
+      </a>
+    </div>
+  </div>
+  
+  <script>
+    function logout() {
+      if (confirm('Are you sure you want to logout?')) {
+        window.location.href = '/logout';
+      }
+    }
+  </script>
+</body>
+</html>
