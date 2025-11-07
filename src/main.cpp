@@ -1,10 +1,8 @@
-// ===== main.cpp =====
 // C++ Standard Libraries
 #include <vector>
 
 // Core Arduino Libraries
 #include <WiFi.h>
-#include <Ethernet.h>
 #include <Wire.h>
 #include <LittleFS.h>
 #include <EEPROM.h>
@@ -15,15 +13,42 @@
 // Third-party Libraries
 #include <WebServer.h>
 #include <HTTPClient.h>
-#include <ArduinoHttpClient.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <PCF8574.h>
 
-// =================================================================
-// --- Program Constants and Version ---
-// =================================================================
-const String program_version = "v2.8.0-FullFeatures-HybridWS";
+// ============================================================
+// CONDITIONAL COMPILATION - Firmware Type
+// ============================================================
+#ifdef FIRMWARE_WIFI_ONLY
+// WiFi-Only Firmware
+#include <WebSocketsClient.h>
+const String program_version = VERSION_STRING;
+#define NETWORK_MODE_NAME "WiFi"
+#pragma message("═════════════════════════════════════════")
+#pragma message("  BUILDING: WiFi-Only Firmware")
+#pragma message("  Version: " VERSION_STRING)
+#pragma message("  Network: WiFi STA → AP Fallback")
+#pragma message("  WebSocket: links2004 (NETWORK_ESP32)")
+#pragma message("  Transport: WiFiClient")
+#pragma message("═════════════════════════════════════════")
+
+#elif defined(FIRMWARE_ETHERNET_ONLY)
+// Ethernet-Only Firmware
+#include <Ethernet.h>
+const String program_version = VERSION_STRING;
+#define NETWORK_MODE_NAME "Ethernet"
+#pragma message("═════════════════════════════════════════")
+#pragma message("  BUILDING: Ethernet-Only Firmware")
+#pragma message("  Version: " VERSION_STRING)
+#pragma message("  Network: Ethernet W5500 → AP Fallback")
+#pragma message("  WebSocket: links2004 (NETWORK_W5100)")
+#pragma message("  Transport: EthernetClient")
+#pragma message("═════════════════════════════════════════")
+
+#else
+#error "Must define FIRMWARE_WIFI_ONLY or FIRMWARE_ETHERNET_ONLY"
+#endif
 
 // =================================================================
 // --- Hardware & Pin Definitions ---
@@ -78,12 +103,19 @@ const int daylightOffset_sec = 0;
 // =================================================================
 // --- Timing & Control ---
 // =================================================================
-const unsigned long wifiTryTime = 10 * 1000;
-const unsigned long ethTryTime = 10 * 1000;
-const unsigned long apTimeout = 150 * 1000;
+#ifndef CONNECT_TIMEOUT
+#define CONNECT_TIMEOUT 15000
+#endif
+
+#ifndef AP_TIMEOUT
+#define AP_TIMEOUT 150000
+#endif
+
+const unsigned long connectTimeout = CONNECT_TIMEOUT;
+const unsigned long apTimeout = AP_TIMEOUT;
 const unsigned long reconnectInterval = 10 * 1000;
 const unsigned long singleAttemptTimeout = 8000;
-unsigned long mqttReconnectInterval = 1000; // agresif saat reconnect
+unsigned long mqttReconnectInterval = 1000;
 const long monitoringInterval = 200;
 const unsigned long forceSendInterval = 20 * 60 * 1000;
 const size_t MAX_BUFFER_SIZE = 100;
@@ -106,18 +138,27 @@ Config config;
 // =================================================================
 WebServer server(80);
 PCF8574 pcf8574(0x20);
-WiFiClient wifiClient;
-EthernetClient ethClient;
-WebSocketClient *ws = nullptr; // dari ArduinoHttpClient
+
+// Network client (conditional)
+#ifdef FIRMWARE_WIFI_ONLY
+WiFiClient netClient;
+WebSocketsClient wsClient;
+#define ACTIVE_CLIENT netClient
+#else
+EthernetClient netClient;
+#define ACTIVE_CLIENT netClient
+#endif
+
 PubSubClient mqttClient;
 
+// Simplified network status
+static bool network_connected = false;
+static bool network_ready = false;
 bool isAPMode = false;
 bool isAuthenticated = false;
 bool isReconnecting = false;
 bool readyToSend = false;
-static bool eth_connected = false;
-static bool wifi_connected = false;
-static bool network_ready = false;
+bool ws_connected = false;
 
 unsigned long apStartTime = 0;
 unsigned long lastCountdownPrint = 0;
@@ -126,6 +167,9 @@ unsigned long lastForceSendTime = 0;
 unsigned long lastReconnectAttempt = 0;
 unsigned long reconnectAttemptStartTime = 0;
 unsigned long lastMqttReconnectAttempt = 0;
+unsigned long lastHttpPollTime = 0;
+const unsigned long httpPollInterval = 5000;
+String httpSessionId = "";
 
 uint8_t lastInputStates[NUM_INPUTS] = {0};
 std::vector<String> monitoringBuffer;
@@ -141,6 +185,7 @@ void setupCommunication();
 void setupOTA();
 void mqttCallback(char *topic, byte *payload, unsigned int length);
 void reconnectMQTT();
+void processCommand(JsonDocument &doc);
 
 // Web Server Handlers
 void handleRoot();
@@ -162,21 +207,13 @@ void writeToEEPROM(int address, const String &value);
 void startAPMode();
 void tryReconnect();
 bool initEthernet();
-void maintainEthernet();
-void checkEthernetStatus();
-void startWifiFallback();
-void switchToEthernetPrefered();
 void wsDisconnect();
 bool wsConnect();
 bool wsSendText(const String &s);
 void wsPump();
 bool loadConfig();
-
-// Helper: pilih client aktif (WiFi/Ethernet)
-Client &activeClient()
-{
-  return eth_connected ? (Client &)ethClient : (Client &)wifiClient;
-}
+bool sendViaHTTP(const String &jsonData, String &resp);
+bool ethHttpPost(const String &host, uint16_t port, const String &path, const String &body, String &response);
 
 // =================================================================
 // --- EEPROM Helpers ---
@@ -239,51 +276,13 @@ void loadIOStateFromEEPROM()
 }
 
 // =================================================================
-// --- WiFi Event Handler ---
-// =================================================================
-void networkEventHandler(WiFiEvent_t event)
-{
-  switch (event)
-  {
-  case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-    if (config.networkMode == "WiFi" || config.networkMode == "Hybrid")
-    {
-      Serial.println("\n[WiFi] Connected!");
-      Serial.println("IP: " + WiFi.localIP().toString());
-      wifi_connected = true;
-      // Rebind WS & MQTT ke WiFi
-      if (config.commMode == "ws")
-      {
-        wsDisconnect();
-        wsConnect();
-      }
-      if (config.commMode == "mqtt")
-      {
-        lastMqttReconnectAttempt = 0;
-        mqttReconnectInterval = 1000;
-      }
-    }
-    else
-    {
-      WiFi.disconnect(true);
-      WiFi.mode(WIFI_OFF);
-    }
-    break;
-  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-    wifi_connected = false;
-    if (config.networkMode == "WiFi")
-      network_ready = false;
-    break;
-  default:
-    break;
-  }
-}
-
-// =================================================================
 // --- Ethernet (W5500) ---
 // =================================================================
 bool initEthernet()
 {
+#ifndef FIRMWARE_ETHERNET_ONLY
+  return false;
+#else
   Serial.println("\n[Ethernet] Initializing...");
   if (eth_rst_pin >= 0)
   {
@@ -293,6 +292,7 @@ bool initEthernet()
     digitalWrite(eth_rst_pin, HIGH);
     delay(200);
   }
+
   SPI.begin(eth_sclk_pin, eth_miso_pin, eth_mosi_pin, eth_cs_pin);
   Ethernet.init(eth_cs_pin);
 
@@ -317,11 +317,14 @@ bool initEthernet()
   Serial.println();
 
   Serial.print("  Trying DHCP... ");
-  if (Ethernet.begin(mac, 10000, 4000) == 0)
+  if (Ethernet.begin(mac, 5000) == 0) // ← Simplified timeout
   {
     Serial.println("FAILED");
     Serial.print("  Trying Static IP... ");
-    IPAddress ip(192, 168, 0, 100), dns(8, 8, 8, 8), gateway(192, 168, 0, 1), subnet(255, 255, 255, 0);
+    IPAddress ip(192, 168, 0, 100);
+    IPAddress dns(8, 8, 8, 8);
+    IPAddress gateway(192, 168, 0, 1);
+    IPAddress subnet(255, 255, 255, 0);
     Ethernet.begin(mac, ip, dns, gateway, subnet);
     delay(1000);
   }
@@ -347,128 +350,7 @@ bool initEthernet()
   Serial.print("  DNS: ");
   Serial.println(Ethernet.dnsServerIP());
   return true;
-}
-
-void maintainEthernet()
-{
-  if (eth_connected)
-    Ethernet.maintain();
-  if (Ethernet.linkStatus() == LinkOFF && eth_connected)
-  {
-    Serial.println("[Ethernet] Cable unplugged!");
-    eth_connected = false;
-    if (config.networkMode == "Ethernet")
-      network_ready = false;
-  }
-}
-
-void checkEthernetStatus()
-{
-  static unsigned long lastCheck = 0;
-  if (millis() - lastCheck < 500)
-    return;
-  lastCheck = millis();
-  auto link = Ethernet.linkStatus();
-  if (link == LinkON)
-  {
-    if (!eth_connected)
-    {
-      Serial.println("\n[Ethernet] Link UP!");
-      Serial.print("  IP: ");
-      Serial.println(Ethernet.localIP());
-      eth_connected = true;
-      network_ready = true;
-      if (config.networkMode == "Hybrid")
-        switchToEthernetPrefered();
-    }
-    Ethernet.maintain();
-  }
-  else
-  {
-    if (eth_connected)
-    {
-      Serial.println("[Ethernet] Link DOWN");
-      eth_connected = false;
-      if (config.networkMode == "Hybrid")
-      {
-        startWifiFallback();
-        if (config.commMode == "mqtt")
-        {
-          if (mqttClient.connected())
-            mqttClient.disconnect();
-          lastMqttReconnectAttempt = 0;
-          mqttReconnectInterval = 1000;
-        }
-        if (config.commMode == "ws")
-        {
-          wsDisconnect();
-          wsConnect();
-        }
-      }
-      else if (config.networkMode == "Ethernet")
-      {
-        network_ready = false;
-      }
-    }
-  }
-}
-
-void startWifiFallback()
-{
-  if (config.wifiSSID.isEmpty())
-    return;
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
-  if (WiFi.getMode() != WIFI_STA)
-    WiFi.mode(WIFI_STA);
-
-  int n = WiFi.scanNetworks();
-  int idx = -1;
-  for (int i = 0; i < n; i++)
-    if (WiFi.SSID(i) == config.wifiSSID)
-    {
-      idx = i;
-      break;
-    }
-
-  if (idx >= 0)
-  {
-    const uint8_t *bssid = WiFi.BSSID(idx);
-    int ch = WiFi.channel(idx);
-    int rssi = WiFi.RSSI(idx);
-    Serial.printf("[Hybrid] WiFi fallback to %s ch %d RSSI %d\n", config.wifiSSID.c_str(), ch, rssi);
-    WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str(), ch, bssid, true);
-  }
-  else
-  {
-    Serial.println("[Hybrid] Target SSID not found, normal begin()");
-    WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
-  }
-}
-
-void switchToEthernetPrefered()
-{
-  if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED)
-  {
-    Serial.println("[Hybrid] Ethernet is back. Disconnecting WiFi...");
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    wifi_connected = false;
-  }
-  if (config.commMode == "mqtt")
-  {
-    mqttClient.setClient(ethClient);
-    if (mqttClient.connected())
-      mqttClient.disconnect();
-    lastMqttReconnectAttempt = 0;
-    mqttReconnectInterval = 1000;
-  }
-  if (config.commMode == "ws")
-  {
-    wsDisconnect();
-    wsConnect();
-  }
+#endif
 }
 
 // =================================================================
@@ -606,21 +488,26 @@ String loadFile(const char *path)
 String buildStatusJSON()
 {
   StaticJsonDocument<512> doc;
-  doc["type"] = "status";
   doc["hardwareId"] = config.hardwareId;
   doc["firmware_version"] = program_version;
   doc["commMode"] = config.commMode;
   doc["serverIP"] = config.serverIP;
   doc["monitoringPort"] = config.monitoringPort;
   doc["networkMode"] = config.networkMode;
-  if (wifi_connected)
+#ifdef FIRMWARE_WIFI_ONLY
+  if (network_connected)
   {
     doc["connection_type"] = "WiFi";
     doc["ip_address"] = WiFi.localIP().toString();
     doc["mac_address"] = WiFi.macAddress();
     doc["wifiSSID"] = config.wifiSSID;
   }
-  else if (eth_connected)
+  else
+  {
+    doc["connection_type"] = "None";
+  }
+#else
+  if (network_connected)
   {
     doc["connection_type"] = "Ethernet";
     doc["ip_address"] = Ethernet.localIP().toString();
@@ -629,6 +516,9 @@ String buildStatusJSON()
   {
     doc["connection_type"] = "None";
   }
+#endif
+  // =============================================
+
   String jsonString;
   serializeJson(doc, jsonString);
   return jsonString;
@@ -639,7 +529,6 @@ String buildMonitoringJSON(bool forThingsBoard = false)
   StaticJsonDocument<512> doc;
   if (!forThingsBoard)
   {
-    doc["type"] = "telemetry";
     doc["box_id"] = config.hardwareId;
   }
   for (int i = 0; i < NUM_PCF_INPUTS; i++)
@@ -696,15 +585,18 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
       resp["wifiSSID"] = config.wifiSSID;
       resp["networkMode"] = config.networkMode;
 
-      if (wifi_connected)
+#ifdef FIRMWARE_WIFI_ONLY
+      if (network_connected)
       {
         resp["ip"] = WiFi.localIP().toString();
         resp["mac"] = WiFi.macAddress();
       }
-      else if (eth_connected)
+#else
+      if (network_connected)
       {
         resp["ip"] = Ethernet.localIP().toString();
       }
+#endif
 
       String jsonOut;
       serializeJson(resp, jsonOut);
@@ -796,15 +688,18 @@ void reconnectMQTT()
   if (millis() - lastMqttReconnectAttempt < mqttReconnectInterval)
     return;
   lastMqttReconnectAttempt = millis();
-  mqttClient.setClient(activeClient());
+
+  mqttClient.setClient(ACTIVE_CLIENT);
   mqttClient.setServer(config.serverIP.c_str(), config.monitoringPort);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(1024);
   mqttClient.setKeepAlive(60);
   mqttClient.setSocketTimeout(15);
 
-  Serial.println("\n=== MQTT CONNECTION ===");
+  Serial.println("\n═══ MQTT CONNECTION ═══");
   Serial.println("Server: " + config.serverIP + ":" + String(config.monitoringPort));
+  Serial.printf("Transport: %s\n", NETWORK_MODE_NAME);
+
   String clientId = "IoTNode-" + config.hardwareId;
   Serial.println("ClientID: " + clientId);
   Serial.print("Connecting... ");
@@ -826,193 +721,440 @@ void reconnectMQTT()
     readyToSend = false;
     mqttReconnectInterval = 1000;
   }
-  Serial.println("=======================\n");
 }
 
 void publishTelemetry()
 {
   if (!mqttClient.connected())
     return;
+
   bool isThingsBoard = (config.serverIP.indexOf("thingsboard") >= 0);
   String data = buildMonitoringJSON(isThingsBoard);
+
   String telemetryTopic = isThingsBoard ? "v1/devices/me/telemetry" : "iot-node/" + config.hardwareId + "/telemetry";
+
   if (mqttClient.publish(telemetryTopic.c_str(), data.c_str()))
   {
-    Serial.println("[MQTT] Telemetry sent to: " + telemetryTopic);
+    Serial.println("[MQTT] Sent to: " + telemetryTopic);
+    Serial.println("Sending : " + data);
   }
   else
   {
-    Serial.println("[MQTT] ✗ Failed to publish Telemetry.");
+    Serial.println("[MQTT] Failed to publish");
   }
 }
 
-// =================================================================
-// --- WebSocket via ArduinoHttpClient ---
+/// =================================================================
+// --- WebSocket Connect ---
 // =================================================================
 bool wsConnect()
 {
-  if (ws)
+#ifdef FIRMWARE_WIFI_ONLY
+  Serial.printf("[WS] Connecting to ws://%s:%d%s\n",
+                config.serverIP.c_str(),
+                config.monitoringPort,
+                config.path.c_str());
+  Serial.printf("[WS] Transport: %s\n", NETWORK_MODE_NAME);
+
+  wsClient.onEvent([](WStype_t type, uint8_t *payload, size_t length)
+                   {
+    switch (type) {
+    case WStype_DISCONNECTED:
+      {
+        Serial.println("[WS] Disconnected!");
+        ws_connected = false;
+      }
+      break;
+
+    case WStype_CONNECTED:
+      {
+        Serial.printf("[WS] ✓ Connected to: %s\n", payload);
+        ws_connected = true;
+        publishStatus();
+      }
+      break;
+
+    case WStype_TEXT:
+      {
+        Serial.printf("[WS] ← Received: %s\n", payload);
+        StaticJsonDocument<512> doc;
+        DeserializationError error = deserializeJson(doc, payload, length);
+        
+        if (!error) {
+          processCommand(doc);
+        } else {
+          Serial.printf("[WS] JSON parse error: %s\n", error.c_str());
+        }
+      }
+      break;
+
+    case WStype_BIN:
+      Serial.printf("[WS] Binary data (%u bytes)\n", length);
+      break;
+
+    case WStype_PING:
+      Serial.println("[WS] Ping");
+      break;
+
+    case WStype_PONG:
+      Serial.println("[WS] Pong");
+      break;
+
+    case WStype_ERROR:
+      {
+        Serial.printf("[WS]  Error: %s\n", payload);
+        ws_connected = false;
+      }
+      break;
+      
+    default:
+      break;
+    } });
+
+  wsClient.setReconnectInterval(5000);
+
+  IPAddress serverIP;
+  if (serverIP.fromString(config.serverIP))
   {
-    delete ws;
-    ws = nullptr;
+    wsClient.begin(serverIP, config.monitoringPort, config.path.c_str());
   }
-  ws = new WebSocketClient(activeClient(), config.serverIP.c_str(), config.monitoringPort);
-  Serial.printf("[WS] Connecting to ws://%s:%d%s\n", config.serverIP.c_str(), config.monitoringPort, config.path.c_str());
-  ws->begin(config.path.c_str());
-  delay(50);
-  bool ok = ws->connected();
-  Serial.println(ok ? "[WS] Connected" : "[WS] Not connected yet");
-  return ok;
+  else
+  {
+    wsClient.begin(config.serverIP, config.monitoringPort, config.path);
+  }
+
+  Serial.println("[WS] Connection initiated...");
+  return true;
+#endif
 }
+
 void wsDisconnect()
 {
-  if (ws)
-  {
-    ws->stop();
-    delete ws;
-    ws = nullptr;
-  }
+#ifdef FIRMWARE_WIFI_ONLY
+  Serial.println("[WS] Disconnecting...");
+  wsClient.disconnect();
+  ws_connected = false;
+#endif
 }
+
 bool wsSendText(const String &s)
 {
-  if (!ws || !ws->connected())
+#ifdef FIRMWARE_WIFI_ONLY
+  if (!ws_connected)
+  {
+    Serial.println("[WS] Not connected, cannot send");
     return false;
-  ws->beginMessage(TYPE_TEXT);
-  ws->print(s);
-  ws->endMessage();
+  }
+
+  String payload = s;
+  wsClient.sendTXT(payload);
   return true;
+#endif
 }
+
 void wsPump()
 {
-  if (!ws)
-    return;
-  int msgType = ws->parseMessage();
-  if (msgType == TYPE_TEXT)
+#ifdef FIRMWARE_WIFI_ONLY
+  wsClient.loop();
+#endif
+}
+
+// =================================================================
+// --- HTTP POST Helper ---
+// =================================================================
+bool ethHttpPost(const String &host, uint16_t port, const String &path, const String &body, String &response)
+{
+#ifndef FIRMWARE_ETHERNET_ONLY
+  // Ethernet tidak tersedia di WiFi firmware
+  Serial.println("[HTTP] Ethernet not available in WiFi firmware");
+  return false;
+
+#else
+  // ============== ETHERNET IMPLEMENTATION ==============
+  if (!netClient.connect(host.c_str(), port))
   {
-    String payload = ws->readString();
-    StaticJsonDocument<400> doc;
-    if (deserializeJson(doc, payload))
+    Serial.println("[HTTP] Ethernet connect failed");
+    return false;
+  }
+
+  netClient.print("POST ");
+  netClient.print(path);
+  netClient.print(" HTTP/1.1\r\n");
+  netClient.print("Host: ");
+  netClient.print(host);
+  netClient.print("\r\n");
+  netClient.print("Content-Type: application/json\r\n");
+  netClient.print("Content-Length: ");
+  netClient.print(body.length());
+  netClient.print("\r\n");
+  netClient.print("Connection: close\r\n\r\n");
+  netClient.print(body);
+
+  unsigned long t0 = millis();
+  while (netClient.connected() && !netClient.available() && millis() - t0 < 5000)
+    delay(10);
+
+  response = "";
+  while (netClient.available())
+    response += (char)netClient.read();
+  netClient.stop();
+
+  int status = -1;
+  int sp1 = response.indexOf(' ');
+  if (sp1 > 0)
+  {
+    int sp2 = response.indexOf(' ', sp1 + 1);
+    if (sp2 > sp1)
+      status = response.substring(sp1 + 1, sp2).toInt();
+  }
+  return status >= 200 && status < 300;
+#endif
+}
+
+bool sendViaHTTP(const String &jsonData, String &resp)
+{
+#ifdef FIRMWARE_WIFI_ONLY
+  // ============== WIFI FIRMWARE ==============
+  HTTPClient http;
+  String url = "http://" + config.serverIP + ":" +
+               String(config.monitoringPort) + config.path;
+  http.begin(netClient, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-ID", config.hardwareId);
+
+  int code = http.POST(jsonData);
+  resp = (code > 0) ? http.getString() : "";
+
+  if (code <= 0)
+  {
+    Serial.printf("[HTTP] ✗ WiFi Error: %s\n", http.errorToString(code).c_str());
+  }
+
+  http.end();
+  return code > 0;
+
+#else
+  // ============== ETHERNET FIRMWARE ==============
+  return ethHttpPost(config.serverIP, config.monitoringPort,
+                     config.path, jsonData, resp);
+#endif
+}
+
+// =================================================================
+// --- HTTP POST Command Polling ---
+// =================================================================
+void pollHTTPCommands()
+{
+  if (millis() - lastHttpPollTime < httpPollInterval)
+    return;
+  lastHttpPollTime = millis();
+
+  String cmdUrl = config.path;
+  if (!cmdUrl.endsWith("/"))
+    cmdUrl += "/";
+  cmdUrl += "commands";
+
+#ifdef FIRMWARE_WIFI_ONLY
+  HTTPClient http;
+  String fullUrl = "http://" + config.serverIP + ":" + String(config.monitoringPort) + cmdUrl;
+  http.begin(netClient, fullUrl); // ← netClient
+  int code = http.GET();
+  if (code == HTTP_CODE_OK)
+  {
+    String payload = http.getString();
+    if (payload.length() && payload != "null" && payload != "[]")
     {
-      Serial.println("[WS] JSON parse error");
-      return;
-    }
-    if (!doc.containsKey("box_id") || doc["box_id"].as<String>() != config.hardwareId)
-      return;
-    if (doc.containsKey("cmd"))
-    {
-      String cmd = doc["cmd"].as<String>();
-
-      if (cmd == "config")
-      {
-        StaticJsonDocument<400> resp;
-        resp["box_id"] = config.hardwareId;
-        resp["serverIP"] = config.serverIP;
-        resp["port"] = config.monitoringPort;
-        resp["wifiSSID"] = config.wifiSSID;
-        resp["networkMode"] = config.networkMode;
-
-        if (wifi_connected)
-        {
-          resp["ip"] = WiFi.localIP().toString();
-          resp["mac"] = WiFi.macAddress();
-        }
-        else if (eth_connected)
-        {
-          resp["ip"] = Ethernet.localIP().toString();
-        }
-
-        String jsonOut;
-        serializeJson(resp, jsonOut);
-        String topic = "iot-node/" + config.hardwareId + "/config_response";
-        mqttClient.publish(topic.c_str(), jsonOut.c_str());
-      }
-      else if (cmd == "restart")
-      {
-        StaticJsonDocument<100> resp;
-        resp["box_id"] = config.hardwareId;
-        resp["status"] = "restarting";
-        String jsonOut;
-        serializeJson(resp, jsonOut);
-        String topic = "iot-node/" + config.hardwareId + "/status";
-        mqttClient.publish(topic.c_str(), jsonOut.c_str());
-        delay(500);
-        ESP.restart();
-      }
-    }
-    else if (doc.containsKey("serverIP") || doc.containsKey("wifiSSID") ||
-             doc.containsKey("monitoringPort") || doc.containsKey("wifiPass") ||
-             doc.containsKey("networkMode"))
-    {
-
-      bool updated = false;
-      if (doc.containsKey("serverIP") && doc["serverIP"].as<String>() != config.serverIP)
-      {
-        config.serverIP = doc["serverIP"].as<String>();
-        updated = true;
-      }
-      if (doc.containsKey("monitoringPort") && doc["monitoringPort"].as<int>() != config.monitoringPort)
-      {
-        config.monitoringPort = doc["monitoringPort"].as<int>();
-        updated = true;
-      }
-      if (doc.containsKey("wifiSSID") && doc["wifiSSID"].as<String>() != config.wifiSSID)
-      {
-        config.wifiSSID = doc["wifiSSID"].as<String>();
-        updated = true;
-      }
-      if (doc.containsKey("wifiPass") && doc["wifiPass"].as<String>().length() > 0)
-      {
-        config.wifiPass = doc["wifiPass"].as<String>();
-        updated = true;
-      }
-      if (doc.containsKey("networkMode"))
-      {
-        String newMode = doc["networkMode"].as<String>();
-        if ((newMode == "Ethernet" || newMode == "WiFi" || newMode == "Hybrid") &&
-            newMode != config.networkMode)
-        {
-          config.networkMode = newMode;
-          updated = true;
-        }
-      }
-
-      if (updated)
-      {
-        saveConfig();
-        StaticJsonDocument<100> resp;
-        resp["box_id"] = config.hardwareId;
-        resp["status"] = "config_updated";
-        String jsonOut;
-        serializeJson(resp, jsonOut);
-        String topic = "iot-node/" + config.hardwareId + "/status";
-        mqttClient.publish(topic.c_str(), jsonOut.c_str());
-        delay(1000);
-        ESP.restart();
-      }
-    }
-    else if (doc.containsKey("O1") || doc.containsKey("O2") ||
-             doc.containsKey("O3") || doc.containsKey("O4"))
-    {
-      for (int i = 0; i < NUM_OUTPUTS; i++)
-      {
-        String key = "O" + String(i + 1);
-        if (doc.containsKey(key))
-        {
-          int state = doc[key].as<int>();
-          digitalWrite(OUTPUT_PINS[i], state == 1 ? HIGH : LOW);
-        }
-      }
-      saveIOStateToEEPROM();
+      StaticJsonDocument<512> doc;
+      if (!deserializeJson(doc, payload))
+        processCommand(doc);
     }
   }
-  else if (!ws->connected())
+  http.end();
+
+#else
+  String resp;
+  if (netClient.connect(config.serverIP.c_str(), config.monitoringPort)) // ← netClient (bukan ethClient)
   {
-    static unsigned long lastTry = 0;
-    if (millis() - lastTry > 1000)
+    netClient.print("GET ");
+    netClient.print(cmdUrl);
+    netClient.print(" HTTP/1.1\r\n");
+    netClient.print("Host: ");
+    netClient.print(config.serverIP);
+    netClient.print("\r\n");
+    netClient.print("Connection: close\r\n\r\n");
+    unsigned long t0 = millis();
+    while (netClient.connected() && !netClient.available() && millis() - t0 < 5000)
+      delay(10);
+    while (netClient.available())
+      resp += (char)netClient.read();
+    netClient.stop();
+
+    int sep = resp.indexOf("\r\n\r\n");
+    String body = (sep >= 0) ? resp.substring(sep + 4) : resp;
+    if (body.length() && body != "null" && body != "[]")
     {
-      lastTry = millis();
-      wsConnect();
+      StaticJsonDocument<512> doc;
+      if (!deserializeJson(doc, body))
+        processCommand(doc);
     }
+  }
+#endif
+}
+
+// =================================================================
+// --- Universal Command Processor ---
+// =================================================================
+void processCommand(JsonDocument &doc)
+{
+  // Validate box_id
+  if (doc.containsKey("box_id") && doc["box_id"].as<String>() != config.hardwareId)
+  {
+    Serial.println("[CMD] box_id mismatch, ignoring");
+    return;
+  }
+
+  // Handle system commands
+  if (doc.containsKey("cmd"))
+  {
+    String cmd = doc["cmd"].as<String>();
+    Serial.println("[CMD] Received: " + cmd);
+
+    if (cmd == "config")
+    {
+      // Send configuration info
+      publishStatus();
+    }
+    else if (cmd == "restart")
+    {
+      Serial.println("[CMD] Restart requested");
+
+      // Send acknowledgment
+      StaticJsonDocument<100> resp;
+      resp["box_id"] = config.hardwareId;
+      resp["status"] = "restarting";
+      String jsonOut;
+      serializeJson(resp, jsonOut);
+
+      if (config.commMode == "ws")
+      {
+        wsSendText(jsonOut);
+      }
+      else if (config.commMode == "mqtt")
+      {
+        String topic = "iot-node/" + config.hardwareId + "/status";
+        mqttClient.publish(topic.c_str(), jsonOut.c_str());
+      }
+      else if (config.commMode == "httppost")
+      {
+        String response;
+        sendViaHTTP(jsonOut, response);
+      }
+
+      delay(500);
+      ESP.restart();
+    }
+    else if (cmd == "get_status")
+    {
+      publishStatus();
+    }
+    else if (cmd == "get_io")
+    {
+      sendMonitoringData();
+    }
+  }
+
+  // Handle configuration update
+  else if (doc.containsKey("serverIP") || doc.containsKey("wifiSSID") ||
+           doc.containsKey("monitoringPort") || doc.containsKey("wifiPass") ||
+           doc.containsKey("networkMode"))
+  {
+    bool updated = false;
+
+    if (doc.containsKey("serverIP") && doc["serverIP"].as<String>() != config.serverIP)
+    {
+      config.serverIP = doc["serverIP"].as<String>();
+      updated = true;
+    }
+    if (doc.containsKey("monitoringPort") && doc["monitoringPort"].as<int>() != config.monitoringPort)
+    {
+      config.monitoringPort = doc["monitoringPort"].as<int>();
+      updated = true;
+    }
+    if (doc.containsKey("wifiSSID") && doc["wifiSSID"].as<String>() != config.wifiSSID)
+    {
+      config.wifiSSID = doc["wifiSSID"].as<String>();
+      updated = true;
+    }
+    if (doc.containsKey("wifiPass") && doc["wifiPass"].as<String>().length() > 0)
+    {
+      config.wifiPass = doc["wifiPass"].as<String>();
+      updated = true;
+    }
+    if (doc.containsKey("networkMode"))
+    {
+      String newMode = doc["networkMode"].as<String>();
+      if ((newMode == "Ethernet" || newMode == "WiFi" || newMode == "Hybrid") &&
+          newMode != config.networkMode)
+      {
+        config.networkMode = newMode;
+        updated = true;
+      }
+    }
+
+    if (updated)
+    {
+      Serial.println("[CMD] Configuration updated");
+      saveConfig();
+
+      // Send acknowledgment
+      StaticJsonDocument<100> resp;
+      resp["box_id"] = config.hardwareId;
+      resp["status"] = "config_updated";
+      String jsonOut;
+      serializeJson(resp, jsonOut);
+
+      if (config.commMode == "ws")
+      {
+        wsSendText(jsonOut);
+      }
+      else if (config.commMode == "mqtt")
+      {
+        String topic = "iot-node/" + config.hardwareId + "/status";
+        mqttClient.publish(topic.c_str(), jsonOut.c_str());
+      }
+      else if (config.commMode == "httppost")
+      {
+        String response;
+        sendViaHTTP(jsonOut, response);
+      }
+
+      delay(1000);
+      ESP.restart();
+    }
+  }
+
+  // Handle output control
+  else if (doc.containsKey("O1") || doc.containsKey("O2") ||
+           doc.containsKey("O3") || doc.containsKey("O4"))
+  {
+    Serial.println("[CMD] Output control received");
+
+    for (int i = 0; i < NUM_OUTPUTS; i++)
+    {
+      String key = "O" + String(i + 1);
+      if (doc.containsKey(key))
+      {
+        int state = doc[key].as<int>();
+        digitalWrite(OUTPUT_PINS[i], state == 1 ? HIGH : LOW);
+        Serial.printf("[CMD] O%d = %d\n", i + 1, state);
+      }
+    }
+
+    saveIOStateToEEPROM();
+
+    // Send acknowledgment with current I/O state
+    delay(100);
+    sendMonitoringData();
   }
 }
 
@@ -1023,39 +1165,54 @@ void sendMonitoringData()
 {
   if (!network_ready)
     return;
-  bool isThingsBoard = (config.serverIP == "mqtt.thingsboard.cloud");
+
+  bool isThingsBoard = (config.serverIP.indexOf("thingsboard") >= 0);
   String data = buildMonitoringJSON(isThingsBoard);
-  Serial.println("Sending Telemetry: " + data);
+
+  Serial.println("Sending : " + data);
 
   if (config.commMode == "ws")
   {
-    wsSendText(data);
+    if (ws_connected)
+    {
+      wsSendText(data);
+    }
+    else
+    {
+      Serial.println("[WS] Not connected, skipping send");
+    }
   }
-  else if (config.commMode == "mqtt" && mqttClient.connected())
+  else if (config.commMode == "mqtt")
   {
-    String topic = isThingsBoard ? "v1/devices/me/telemetry" : "iot-node/" + config.hardwareId + "/telemetry";
-    mqttClient.publish(topic.c_str(), data.c_str());
+    if (mqttClient.connected())
+    {
+      String topic = isThingsBoard ? "v1/devices/me/telemetry" : "iot-node/" + config.hardwareId + "/telemetry";
+      mqttClient.publish(topic.c_str(), data.c_str());
+    }
   }
   else if (config.commMode == "httppost")
   {
-    HttpClient http(activeClient(), config.serverIP.c_str(), config.monitoringPort);
-    StaticJsonDocument<100> doc;
-    doc["box_id"] = config.hardwareId;
-    doc["status"] = "online";
-    String jsonString;
-    serializeJson(doc, jsonString);
+    String response;
+    if (sendViaHTTP(data, response))
+    {
+      Serial.println("[HTTP] Telemetry sent successfully");
 
-    http.beginRequest();
-    http.post(config.path.c_str());
-    http.sendHeader("Content-Type", "application/json");
-    http.sendHeader("Content-Length", jsonString.length());
-    http.beginBody();
-    http.print(jsonString);
-    http.endRequest();
+      // Check if server sent command in response
+      if (response.length() > 0 && response != "OK" && response != "null")
+      {
+        Serial.println("[HTTP] Server response: " + response);
 
-    int statusCode = http.responseStatusCode();
-    String response = http.responseBody();
-    Serial.printf("Initial HTTP POST %s [%d]\n", statusCode > 0 ? "Success" : "Error", statusCode);
+        StaticJsonDocument<512> doc;
+        if (deserializeJson(doc, response) == DeserializationError::Ok)
+        {
+          processCommand(doc);
+        }
+      }
+    }
+    else
+    {
+      Serial.println("[HTTP] Failed to send telemetry");
+    }
   }
 }
 
@@ -1063,38 +1220,32 @@ void publishStatus()
 {
   if (!network_ready)
     return;
+
   String statusData = buildStatusJSON();
   Serial.println("Publishing Status: " + statusData);
 
   if (config.commMode == "ws")
   {
-    wsSendText(statusData);
+    if (ws_connected)
+    {
+      wsSendText(statusData);
+    }
   }
-  else if (config.commMode == "mqtt" && mqttClient.connected())
+  else if (config.commMode == "mqtt")
   {
-    String topic = "iot-node/" + config.hardwareId + "/status";
-    mqttClient.publish(topic.c_str(), statusData.c_str());
+    if (mqttClient.connected())
+    {
+      String topic = "iot-node/" + config.hardwareId + "/status";
+      mqttClient.publish(topic.c_str(), statusData.c_str());
+    }
   }
   else if (config.commMode == "httppost")
   {
-    HttpClient http(activeClient(), config.serverIP.c_str(), config.monitoringPort);
-    StaticJsonDocument<100> doc;
-    doc["box_id"] = config.hardwareId;
-    doc["status"] = "online";
-    String jsonString;
-    serializeJson(doc, jsonString);
-
-    http.beginRequest();
-    http.post(config.path.c_str());
-    http.sendHeader("Content-Type", "application/json");
-    http.sendHeader("Content-Length", jsonString.length());
-    http.beginBody();
-    http.print(jsonString);
-    http.endRequest();
-
-    int statusCode = http.responseStatusCode();
-    String response = http.responseBody();
-    Serial.printf("Initial HTTP POST %s [%d]\n", statusCode > 0 ? "Success" : "Error", statusCode);
+    String response;
+    if (sendViaHTTP(statusData, response))
+    {
+      Serial.println("[HTTP] Status published successfully");
+    }
   }
 }
 
@@ -1254,12 +1405,20 @@ void handleStatusPage()
     html.replace("%SERVER_PORT%", String(config.monitoringPort));
     html.replace("%PATH%", config.path);
 
-    if (wifi_connected)
+    // ✅ FIX: Conditional compilation
+#ifdef FIRMWARE_WIFI_ONLY
+    if (network_connected)
     {
       html.replace("%IP_ADDRESS%", WiFi.localIP().toString());
       html.replace("%MAC_ADDRESS%", WiFi.macAddress());
     }
-    else if (eth_connected)
+    else
+    {
+      html.replace("%IP_ADDRESS%", "Not Connected");
+      html.replace("%MAC_ADDRESS%", "N/A");
+    }
+#else
+    if (network_connected)
     {
       html.replace("%IP_ADDRESS%", Ethernet.localIP().toString());
       html.replace("%MAC_ADDRESS%", "N/A");
@@ -1269,6 +1428,7 @@ void handleStatusPage()
       html.replace("%IP_ADDRESS%", "Not Connected");
       html.replace("%MAC_ADDRESS%", "N/A");
     }
+#endif
 
     server.send(200, "text/html", html);
   }
@@ -1499,7 +1659,6 @@ void handleSaveConfig()
   }
   else
   {
-    // Fallback dengan tampilan bagus
     Serial.println("[Config] Warning: success.html not found, using enhanced fallback");
 
     String fallbackHtml =
@@ -1538,7 +1697,7 @@ void handleSaveConfig()
     server.sendHeader("Connection", "close");
     server.send(200, "text/html", fallbackHtml);
 
-    delay(5100); // 5 seconds + buffer
+    delay(5100);
     ESP.restart();
   }
 }
@@ -1703,11 +1862,21 @@ void serveErrorPage(String errorMessage)
 // =================================================================
 void setupOTA()
 {
+#ifdef FIRMWARE_WIFI_ONLY
+  if (!network_connected)
+  {
+    Serial.println("[OTA] Skipped - WiFi not connected");
+    return;
+  }
+
   ArduinoOTA.setPort(3232);
   ArduinoOTA.setHostname(config.hardwareId.c_str());
   ArduinoOTA.setPassword(default_password);
   ArduinoOTA.begin();
-  Serial.println("OTA Ready");
+  Serial.println("[OTA] Service started (WiFi mode)");
+#else
+  Serial.println("[OTA] Not available in Ethernet firmware");
+#endif
 }
 
 // =================================================================
@@ -1715,167 +1884,195 @@ void setupOTA()
 // =================================================================
 void setupNetwork()
 {
-  WiFi.onEvent(networkEventHandler);
   isAPMode = false;
+  network_connected = false;
   network_ready = false;
-  wifi_connected = false;
-  eth_connected = false;
 
-  Serial.println("Starting network sequence (Mode: " + config.networkMode + ")");
-  bool connected = false;
+  Serial.println("\n╔════════════════════════════════════════════════════╗");
+  Serial.printf("║ NETWORK INITIALIZATION - %s Mode%*s║\n",
+                NETWORK_MODE_NAME,
+                24 - strlen(NETWORK_MODE_NAME), "");
+  Serial.println("╠════════════════════════════════════════════════════╣");
 
-  if (config.networkMode == "Ethernet")
+#ifdef FIRMWARE_WIFI_ONLY
+  Serial.printf("║ Timeout: %d seconds%*s║\n",
+                CONNECT_TIMEOUT / 1000, 31, "");
+  Serial.println("╚════════════════════════════════════════════════════╝");
+
+  if (config.wifiSSID.length() == 0)
   {
-    Serial.println("[Ethernet] Trying (" + String(ethTryTime / 1000) + "s)...");
-    WiFi.mode(WIFI_OFF);
-    if (initEthernet())
-    {
-      eth_connected = true;
-      network_ready = true;
-      connected = true;
-      Serial.println("[Ethernet] connected.");
-    }
-    else
-      Serial.println("[Ethernet] init failed.");
-
-    unsigned long startEth = millis();
-    while (millis() - startEth < ethTryTime)
-    {
-      if (eth_connected)
-      {
-        connected = true;
-        break;
-      }
-      delay(100);
-      Serial.print(".");
-    }
-    Serial.println();
-  }
-  else if (config.networkMode == "WiFi")
-  {
-    Serial.println("[WiFi] Trying (" + String(wifiTryTime / 1000) + "s)...");
-    if (config.wifiSSID.length() > 0)
-    {
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
-      unsigned long startWiFi = millis();
-      while (millis() - startWiFi < wifiTryTime)
-      {
-        if (WiFi.status() == WL_CONNECTED)
-        {
-          wifi_connected = true;
-          connected = true;
-          break;
-        }
-        delay(250);
-        Serial.print(".");
-      }
-      Serial.println();
-    }
-    else
-    {
-      Serial.println("[WiFi] SSID not configured.");
-    }
-  }
-  else
-  { // Hybrid
-    Serial.println("[Hybrid] Trying Ethernet first...");
-    if (initEthernet())
-    {
-      eth_connected = true;
-      connected = true;
-      Serial.println("[Ethernet] Connected!");
-    }
-    else
-    {
-      Serial.println("[Ethernet] Failed. Trying WiFi...");
-      startWifiFallback();
-      Serial.println("[Hybrid] WiFi connecting in background...");
-      unsigned long startWiFi = millis();
-      while (millis() - startWiFi < wifiTryTime)
-      {
-        if (WiFi.status() == WL_CONNECTED)
-        {
-          wifi_connected = true;
-          connected = true;
-          break;
-        }
-        delay(250);
-        Serial.print(".");
-      }
-      Serial.println();
-    }
-  }
-
-  if (!connected)
-  {
-    Serial.println("[Network] All connection attempts failed! Starting AP Mode");
+    Serial.println("[WiFi] ✗ SSID not configured!");
+    Serial.println("[WiFi] Starting AP Mode...");
     startAPMode();
+    return;
   }
-  else
+
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+
+  Serial.printf("[WiFi] Connecting to: %s\n", config.wifiSSID.c_str());
+  WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
+
+  unsigned long startTime = millis();
+  int dots = 0;
+
+  while (WiFi.status() != WL_CONNECTED &&
+         (millis() - startTime < connectTimeout))
   {
-    Serial.println("[Network] Successfully connected.");
+    delay(500);
+    Serial.print(".");
+    dots++;
+    if (dots % 40 == 0)
+      Serial.println();
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("[WiFi] Connected!");
+    Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WiFi] MAC: %s\n", WiFi.macAddress().c_str());
+    Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+    network_connected = true;
     network_ready = true;
     setupCommunication();
   }
+  else
+  {
+    Serial.println("[WiFi] Connection FAILED!");
+    Serial.println("[WiFi] Starting AP Mode...");
+    startAPMode();
+  }
+
+#else // FIRMWARE_ETHERNET_ONLY
+  Serial.printf("║ Timeout: %d seconds%*s║\n",
+                CONNECT_TIMEOUT / 1000, 31, "");
+  Serial.println("╚════════════════════════════════════════════════════╝");
+
+  WiFi.mode(WIFI_OFF);
+
+  if (initEthernet())
+  {
+    unsigned long startTime = millis();
+    Serial.print("[Ethernet] Waiting for link");
+
+    while (Ethernet.linkStatus() == LinkOFF &&
+           (millis() - startTime < connectTimeout))
+    {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (Ethernet.linkStatus() == LinkON)
+    {
+      Serial.println("[Ethernet] Connected!");
+      Serial.printf("[Ethernet] IP: %s\n", Ethernet.localIP().toString().c_str());
+      Serial.printf("[Ethernet] Gateway: %s\n", Ethernet.gatewayIP().toString().c_str());
+      Serial.printf("[Ethernet] Subnet: %s\n", Ethernet.subnetMask().toString().c_str());
+      network_connected = true;
+      network_ready = true;
+      setupCommunication();
+    }
+    else
+    {
+      Serial.println("[Ethernet] No cable detected!");
+      Serial.println("[Ethernet] Starting AP Mode...");
+      startAPMode();
+    }
+  }
+  else
+  {
+    Serial.println("[Ethernet] Initialization FAILED!");
+    Serial.println("[Ethernet] Starting AP Mode...");
+    startAPMode();
+  }
+#endif
 }
 
 void setupCommunication()
 {
   if (isAPMode || readyToSend)
     return;
-  Serial.println("Memulai layanan komunikasi (" + config.commMode + ")...");
+
+  Serial.println("\n╔════════════════════════════════════════════════════╗");
+  Serial.printf("║ COMMUNICATION SETUP - %s Mode%*s║\n",
+                config.commMode.c_str(),
+                21 - config.commMode.length(), "");
+  Serial.println("╚════════════════════════════════════════════════════╝");
 
   if (config.commMode == "ws")
   {
+#ifndef FIRMWARE_WIFI_ONLY
     wsConnect();
+    readyToSend = true;
+#endif
   }
   else if (config.commMode == "mqtt")
   {
-    mqttClient.setClient(activeClient());
+    mqttClient.setClient(ACTIVE_CLIENT); // ← Macro yang resolve ke netClient
     mqttClient.setServer(config.serverIP.c_str(), config.monitoringPort);
     mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(1024);
     mqttClient.setKeepAlive(60);
     mqttClient.setSocketTimeout(15);
+
+    Serial.printf("[MQTT] Initialized via %s\n", NETWORK_MODE_NAME); // ← Macro
   }
   else if (config.commMode == "httppost")
   {
-    HttpClient http(activeClient(), config.serverIP.c_str(), config.monitoringPort);
-    StaticJsonDocument<100> doc;
-    doc["box_id"] = config.hardwareId;
-    doc["status"] = "online";
-    String jsonString;
-    serializeJson(doc, jsonString);
+    String statusData = buildStatusJSON();
+    String resp;
 
-    http.beginRequest();
-    http.post(config.path.c_str());
-    http.sendHeader("Content-Type", "application/json");
-    http.sendHeader("Content-Length", jsonString.length());
-    http.beginBody();
-    http.print(jsonString);
-    http.endRequest();
+    if (sendViaHTTP(statusData, resp))
+    {
+      Serial.println("[HTTP] Initial status sent");
+      if (resp.length())
+        Serial.println("Response: " + resp);
+    }
+    else
+    {
+      Serial.println("[HTTP] Failed to send initial status");
+    }
 
-    int statusCode = http.responseStatusCode();
-    String response = http.responseBody();
-    Serial.printf("Initial HTTP POST %s [%d]\n", statusCode > 0 ? "Success" : "Error", statusCode);
+    readyToSend = true;
   }
-  readyToSend = true;
 }
 
 void startAPMode()
 {
   isAPMode = true;
+  network_connected = false;
   network_ready = false;
-  wifi_connected = false;
-  eth_connected = false;
+
   String finalApSsid = ap_ssid + config.hardwareId;
+
+  Serial.println("\n╔════════════════════════════════════════════════════╗");
+  Serial.println("║              AP MODE ACTIVATED                     ║");
+  Serial.println("╠════════════════════════════════════════════════════╣");
+  Serial.printf("║ SSID:     %-40s ║\n", finalApSsid.c_str());
+  Serial.printf("║ Password: %-40s ║\n", ap_password);
+  Serial.printf("║ Timeout:  %d seconds%*s║\n",
+                AP_TIMEOUT / 1000, 29, "");
+  Serial.println("╠════════════════════════════════════════════════════╣");
+  Serial.println("║ 1. Connect to WiFi AP above                        ║");
+  Serial.println("║ 2. Open browser: http://192.168.4.1                ║");
+  Serial.println("║ 3. Configure network settings                      ║");
+  Serial.println("║ 4. Device will restart automatically               ║");
+  Serial.println("╚════════════════════════════════════════════════════╝\n");
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
   WiFi.softAP(finalApSsid.c_str(), ap_password);
+
   apStartTime = millis();
-  Serial.println("[AP MODE] Started: " + finalApSsid + " with IP: " + WiFi.softAPIP().toString());
-  if (ws)
+
+  Serial.printf("[AP] IP Address: %s\n", WiFi.softAPIP().toString().c_str());
+  Serial.println("[AP] Waiting for configuration...\n");
+
+  if (ws_connected)
     wsDisconnect();
   if (mqttClient.connected())
     mqttClient.disconnect();
@@ -1884,44 +2081,28 @@ void startAPMode()
 
 void tryReconnect()
 {
-  if (config.networkMode == "WiFi")
+#ifdef FIRMWARE_WIFI_ONLY
+  if (config.wifiSSID.length() > 0)
   {
-    if (config.wifiSSID.length() > 0)
-    {
-      WiFi.disconnect(true);
-      delay(300);
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
-    }
-    else
-    {
-      startAPMode();
-      return;
-    }
-  }
-  else if (config.networkMode == "Ethernet")
-  {
-    if (wifi_connected)
-    {
-      WiFi.disconnect(true);
-      WiFi.mode(WIFI_OFF);
-      wifi_connected = false;
-    }
-    if (initEthernet())
-      eth_connected = true;
+    Serial.println("[Reconnect] Attempting WiFi...");
+    WiFi.disconnect(true);
+    delay(300);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(config.wifiSSID.c_str(), config.wifiPass.c_str());
   }
   else
-  { // Hybrid
-    if (Ethernet.linkStatus() == LinkOFF)
-    {
-      startWifiFallback();
-      isReconnecting = false;
-      return;
-    }
-    eth_connected = true;
-    isReconnecting = false;
+  {
+    startAPMode();
     return;
   }
+#else // FIRMWARE_ETHERNET_ONLY
+  Serial.println("[Reconnect] Re-initializing Ethernet...");
+  if (initEthernet() && Ethernet.linkStatus() == LinkON)
+  {
+    network_connected = true;
+  }
+#endif
+
   isReconnecting = true;
   reconnectAttemptStartTime = millis();
 }
@@ -1981,7 +2162,13 @@ void setup()
   if (!isAPMode)
   {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    setupOTA();
+
+#ifdef FIRMWARE_WIFI_ONLY
+    if (network_connected)
+    {
+      setupOTA();
+    }
+#endif
   }
 
   server.on("/", HTTP_GET, handleRoot);
@@ -2016,57 +2203,79 @@ void loop()
   {
     unsigned long now = millis();
     unsigned long elapsed = now - apStartTime;
+
     if (apStartTime > 0 && now - lastCountdownPrint >= 1000)
     {
       lastCountdownPrint = now;
       unsigned long remaining = (apTimeout > elapsed) ? (apTimeout - elapsed) / 1000 : 0;
-      Serial.printf("[AP MODE] Active. Restarting in %lu seconds...\n", remaining);
+      Serial.printf("[AP MODE] Active. Restart in %lu seconds...\n", remaining);
     }
+
     if (elapsed >= apTimeout)
     {
-      Serial.println("[AP MODE] Timeout. Restarting...");
+      Serial.println("[AP MODE] Timeout! Restarting...");
       delay(200);
       ESP.restart();
     }
     return;
   }
 
-  if (config.networkMode == "Ethernet" || config.networkMode == "Hybrid")
-    checkEthernetStatus();
-  if (eth_connected)
-    maintainEthernet();
+#ifdef FIRMWARE_WIFI_ONLY
+  bool isConnected = (WiFi.status() == WL_CONNECTED);
+#else
+  Ethernet.maintain();
+  bool isConnected = (Ethernet.linkStatus() == LinkON);
+#endif
 
-  bool isNetworkConnected = wifi_connected || eth_connected;
-  if (isNetworkConnected)
+  if (isConnected)
   {
+    if (!network_connected)
+    {
+      network_connected = true;
+      network_ready = true;
+      Serial.printf("[%s] Reconnected!\n", NETWORK_MODE_NAME);
+    }
+
     if (isReconnecting)
     {
       isReconnecting = false;
       reconnectAttemptCount = 0;
       reconnectAttemptStartTime = 0;
     }
+
     if (!readyToSend)
     {
       setupCommunication();
     }
 
+#ifdef FIRMWARE_WIFI_ONLY
     ArduinoOTA.handle();
+#endif
 
+    // Communication handlers
     if (config.commMode == "ws")
+    {
       wsPump();
+    }
     else if (config.commMode == "mqtt")
     {
       if (!mqttClient.connected())
         reconnectMQTT();
       mqttClient.loop();
     }
+    else if (config.commMode == "httppost")
+    {
+      pollHTTPCommands();
+    }
 
+    // I/O monitoring
     unsigned long currentTime = millis();
     if (currentTime - lastMonitoringTime >= monitoringInterval)
     {
       lastMonitoringTime = currentTime;
       bool hasChanged = checkInputChanges();
       bool forceSend = (currentTime - lastForceSendTime >= forceSendInterval);
+
       if (hasChanged || forceSend)
       {
         sendMonitoringData();
@@ -2077,18 +2286,24 @@ void loop()
   }
   else
   {
-    if (network_ready)
+    // Disconnected handling
+    if (network_connected)
     {
+      network_connected = false;
       network_ready = false;
       readyToSend = false;
-      if (ws)
+      Serial.printf("[%s] Disconnected!\n", NETWORK_MODE_NAME);
+
+      if (ws_connected)
         wsDisconnect();
       if (mqttClient.connected())
         mqttClient.disconnect();
+
       isReconnecting = false;
       reconnectAttemptCount = 0;
       reconnectAttemptStartTime = 0;
     }
+
     if (!isReconnecting)
     {
       if (reconnectAttemptCount >= maxReconnectAttempts)
@@ -2097,6 +2312,7 @@ void loop()
         startAPMode();
         return;
       }
+
       if (reconnectAttemptCount > 0)
         delay(2000);
       tryReconnect();

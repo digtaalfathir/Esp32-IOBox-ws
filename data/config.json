@@ -1,13 +1,13 @@
 {
   "hardwareId": "001",
   "server": {
-    "serverIP": "alaadiyaat.site",
+    "serverIP": "192.168.0.100",
     "path": "/wsiot" 
   },
-  "monitoringPort":80,
-  "commMode": "ws",
+  "monitoringPort":8080,
+  "commMode": "httppost",
   "accessTokenMQTT": "",
-  "networkMode": "Ethernet",
+  "networkMode": "Ethertnet",
   "wifi": {
     "ssid": "Alaadiyaat",
     "password": "alaadiyaat25"
